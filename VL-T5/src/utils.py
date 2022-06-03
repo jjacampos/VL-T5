@@ -4,6 +4,28 @@ import torch
 import torch.distributed as dist
 import collections
 import logging
+import json
+from pycocotools.coco import COCO
+
+def get_memories_mappings(args):
+    coco_api = COCO(args.coco_annotations_path)
+    memories_to_data = {}
+    repeated_memories = 0
+    for file_path in args.memory_files:
+        with open(file_path), 'r', encoding='utf-8') as input_file:
+            graph_data = json.load(input_file)
+            for graph in graph_data:
+                for memory in graph['memories']:
+                    if memory['memory_id'] in memories_to_data:
+                        repeated_memories += 1
+                    else:
+                        memories_to_data[memory['memory_id']] = self.coco.loadImgs(memory['memory_id'])['media'][0]['media_id']
+
+    print(f"There are {repeated_memories} repeated memories in the dataset")
+    print(f"Read {len(memories_to_data)} memories loaded")
+
+    return memories_to_data
+
 
 def get_area(pos):
     """
