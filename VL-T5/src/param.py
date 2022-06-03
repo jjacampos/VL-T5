@@ -56,6 +56,17 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--seed', type=int, default=9595, help='random seed')
 
+    # Added params for COMET
+    parser.add_argument("--train_path", required=True)
+    parser.add_argument("--valid_path", required=True)
+    parser.add_argument("--test_path", default=None)
+
+    parser.add_argument("--coco_annotations_path", required=True)
+    parser.add_argument("--memory_files", required=True)
+    parser.add_argument("--coco_features_path", required=True)
+
+    
+    
     # Data Splits
     parser.add_argument("--train", default='train')
     parser.add_argument("--valid", default='valid')
