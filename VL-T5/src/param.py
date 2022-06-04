@@ -60,12 +60,16 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument("--train_path", required=True)
     parser.add_argument("--valid_path", required=True)
     parser.add_argument("--test_path", default=None)
+    parser.add_argument("--special_tokens_path", default=None)
 
     parser.add_argument("--coco_annotations_path", required=True)
-    parser.add_argument("--memory_files", required=True)
+    parser.add_argument("--memory_files", required=True, nargs='+')
     parser.add_argument("--coco_features_path", required=True)
 
-    
+    parser.add_argument('--do_train', action='store_true')
+    parser.add_argument('--do_test', action='store_true')
+
+    parser.add_argument('--n_images', type=int, default=8)
     
     # Data Splits
     parser.add_argument("--train", default='train')

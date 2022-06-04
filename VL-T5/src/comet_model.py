@@ -1,4 +1,5 @@
 import torch
+import pdb
 import torch.nn as nn
 import numpy as np
 
@@ -25,7 +26,7 @@ class VLT5COMET(VLT5):
 
         img_order_ids = []
         for i in range(context_images_amount):
-            image_order_ids += [i] * feat_dim
+            img_order_ids += [i] * feat_dim
             
         img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
         img_order_ids = img_order_ids.view(1, context_images_amount*feat_dim).expand(B, -1)
@@ -78,7 +79,7 @@ class VLT5COMET(VLT5):
         
 from modeling_bart import VLBart
 
-class VLBartComet(VLBart):
+class VLBartCOMET(VLBart):
 
     def __init__(self, config):
         super().__init__(config)
@@ -90,24 +91,23 @@ class VLBartComet(VLBart):
 
         input_ids = batch['input_ids'].to(device)
         B = len(input_ids)
-
-        vis_feats = batch['vis_feats'].to(device)
-        vis_pos = batch['boxes'].to(device)
-        context_images_amount = vis_feats.size(1)
-        feat_dim = vis_feats.size(2)
+        feat_dim = batch['vis_feats'].size(3)
+        n_boxes = batch['vis_feats'].size(2)
+        context_images_amount = batch['vis_feats'].size(1)
         
+        vis_feats = batch['vis_feats'].to(device).view(B, context_images_amount*n_boxes, feat_dim)
+        vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         labels = batch['target'].to(device)
 
         img_order_ids = []
         for i in range(context_images_amount):
-            image_order_ids += [i] * feat_dim
-            
+            img_order_ids += [i] * n_boxes
+
         img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*feat_dim).expand(B, -1)
+        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
 
-        obj_order_ids = torch.arange(V_L, dtype=torch.long, device=device)
-        obj_order_ids = obj_order_ids.view(1, 1, V_L).expand(B, context_images_amount, -1).contiguous().view(B, 2*V_L)
-
+        obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
+        obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
         
         output = self(input_ids=input_ids,
                       vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),
@@ -116,13 +116,12 @@ class VLBartComet(VLBart):
 
 
         # Don't take padding tokens into account for loss
-        lm_mask = (lm_labels != -100).float()
-        B, L = lm_labels.size()
+        lm_mask = (labels != -100).float()
+        B, L = labels.size()
 
         loss = output['loss']
         loss = loss.view(B, L) * lm_mask
         loss = loss.sum(dim=1) / lm_mask.sum(dim=1).clamp(min=1)  # B
-        loss = loss * batch['scores'].to(device=device)
         loss = loss.mean()
 
         result = {

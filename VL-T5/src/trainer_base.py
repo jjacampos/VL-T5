@@ -70,7 +70,7 @@ class TrainerBase(object):
 
         config.feat_dim = args.feat_dim
         config.pos_dim = args.pos_dim
-        config.n_images = 2
+        config.n_images = args.n_images
 
         config.use_vis_order_embedding = args.use_vis_order_embedding
 
@@ -169,8 +169,12 @@ class TrainerBase(object):
         return optim, lr_scheduler
 
     def load_checkpoint(self, ckpt_path):
-        state_dict = load_state_dict(ckpt_path, 'cpu')
+        prev_state_dict = load_state_dict(ckpt_path, 'cpu')
 
+        # Do not use learned positions for images as we have more now, train them from scratch
+        state_dict = {k: v for k, v in prev_state_dict.items() if 'img_order_embedding' not in k}
+        
+        
         original_keys = list(state_dict.keys())
         for key in original_keys:
             if key.startswith("vis_encoder."):
@@ -184,7 +188,7 @@ class TrainerBase(object):
         results = self.model.load_state_dict(state_dict, strict=False)
         if self.verbose:
             print('Model loaded from ', ckpt_path)
-            pprint(results)
+            print(results)
 
     def init_weights(self):
 
