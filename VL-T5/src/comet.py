@@ -1,6 +1,9 @@
+import dist_utils
+from pprint import pformat
+import numpy as np
 from packaging import version
-
-from comet_data import COMETFineTuneDataset
+import pdb
+from comet_data import COMETFineTuneDataset, COMETEvaluator
 import logging
 from tqdm import tqdm
 from pathlib import Path
@@ -116,7 +119,9 @@ class Trainer(TrainerBase):
         if self.verbose:
             print(f'It took {time() - start:.1f}s')
 
-
+        # Initialize evaluator
+        self.evaluator = COMETEvaluator()
+            
     def train(self):
         if self.verbose:
             loss_meter = LossMeter()
@@ -253,12 +258,13 @@ class Trainer(TrainerBase):
                 pbar.close()
 
             # Validation
-            valid_results = self.evaluate(self.val_loader)
+            valid_results = self.validate(self.val_loader)
+            valid_metrics = self.evaluate(self.val_loader)
 
             if self.verbose:
-                valid_score = valid_results['CIDEr']
+                valid_score = valid_results['loss']
 
-                if valid_score > best_valid or epoch == 0:
+                if valid_score < best_valid or epoch == 0:
                     best_valid = valid_score
                     best_epoch = epoch
                     self.save("BEST")
@@ -266,8 +272,8 @@ class Trainer(TrainerBase):
                 log_str = ''
 
                 log_str += pformat(valid_results)
-                log_str += "\nEpoch %d: Valid CIDEr %0.4f" % (epoch, valid_score)
-                log_str += "\nEpoch %d: Best CIDEr %0.4f\n" % (best_epoch, best_valid)
+                log_str += "\nEpoch %d: Valid loss %0.4f" % (epoch, valid_score)
+                log_str += "\nEpoch %d: Best loss %0.4f\n" % (best_epoch, best_valid)
 
                 wandb_log_dict = {}
                 wandb_log_dict['Train/Loss'] = epoch_results['loss'] / len(self.train_loader)
@@ -312,7 +318,7 @@ class Trainer(TrainerBase):
             dist.barrier()
 
 
-    def predict(self):
+    def predict(self, loader):
         """
         Predict the answers to questions in a data split.
         :param eval_tuple: The data tuple to be evaluated.
@@ -321,7 +327,6 @@ class Trainer(TrainerBase):
         """
         self.model.eval()
         with torch.no_grad():
-
             predictions = []
             targets = []
 
@@ -330,7 +335,6 @@ class Trainer(TrainerBase):
             gen_kwargs['max_length'] = self.args.gen_max_length
 
             for i, batch in enumerate(tqdm(loader, ncols=120, desc="Prediction", disable=not self.verbose)):
-
                 if self.args.distributed:
                     results = self.model.module.test_step(
                         batch,
@@ -344,7 +348,6 @@ class Trainer(TrainerBase):
 
                 if 'targets' in batch:
                     targets.extend(batch['targets'])
-
             results = {
                 'predictions': predictions,
                 'targets': targets
@@ -352,7 +355,6 @@ class Trainer(TrainerBase):
 
             if self.args.distributed:
                 dist.barrier()
-
                 dist_results = dist_utils.all_gather(results)
                 predictions = []
                 targets = []
@@ -363,21 +365,43 @@ class Trainer(TrainerBase):
                     'predictions': predictions,
                     'targets': targets
                 }
-
             return results
 
-    #TODO
-    def evaluate(self):
-        results = self.predict(loader, dump_path)
+    def validate(self, loader):
+        self.model.eval()
+        with torch.no_grad():
+            losses = []
+            for i, batch in enumerate(tqdm(loader, ncols=120, desc="Prediction", disable=not self.verbose)):
+                if self.args.distributed:
+                    results = self.model.module.valid_step(batch)
+                else:
+                    results = self.model.valid_step(batch)
+                losses.extend(results['loss'])
 
-        if self.verbose:
-            predictions = results['predictions']
-            print('# predictions:', len(predictions))
-            if dump_path is None:
-                targets = results['targets']
-                evaluator = loader.evaluator
-                eval_results = evaluator.evaluate(predictions, targets)
-            return eval_results
+            results = {'loss': losses}
+            
+            if self.args.distributed:
+                dist.barrier()
+                dist_results = dist_utils.all_gather(results)
+                losses = []
+                for result in dist_results:
+                    losses.extend(result['loss'])
+            print(losses)
+            results = {
+                'loss': np.mean(losses),
+            }
+            return results
+        
+    def evaluate(self, loader):
+
+        results = self.predict(loader)
+
+        predictions = results['predictions']
+        print('# predictions:', len(predictions))
+        targets = results['targets']
+        evaluator = self.evaluator
+        eval_results = evaluator.evaluate(predictions, targets)
+        return eval_results
 
         
 def main(args):
@@ -416,12 +440,9 @@ def main(args):
                                     num_workers=args.num_workers,
                                     pin_memory=True,
                                     sampler=None,
+                                    collate_fn=val_dataset.collate_fn,
                                     drop_last=False)
 
-        trainer = Trainer(args, train_dataloader, val_dataset, train=True)
-        trainer.train()
-        
-    if args.do_test:
         print('Building the test loader')
         test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
         test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args)
@@ -430,9 +451,13 @@ def main(args):
                                     shuffle=False,
                                     num_workers=args.num_workers,
                                     pin_memory=True,
+                                    collate_fn=test_dataset.collate_fn,
                                     sampler=None,
                                     drop_last=False)
-            
+        
+        trainer = Trainer(args, train_dataloader, val_dataloader, test_dataloader, train=True)
+        trainer.train()
+        
 
 if __name__ == '__main__':
     cudnn.benchmark = True
