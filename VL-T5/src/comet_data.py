@@ -28,7 +28,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, verbose=True):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -40,15 +40,7 @@ class COMETFineTuneDataset(Dataset):
         self.n_boxes = args.n_boxes
         self.feat_dim = args.feat_dim
         
-        if 't5' in args.backbone:
-            self.tokenizer = VLT5TokenizerFast.from_pretrained(
-                args.backbone,
-                max_length=args.max_text_length,
-                do_lower_case=args.do_lower_case)
-        elif 'bart' in args.backbone:
-            self.tokenizer = BartTokenizer.from_pretrained(
-                args.backbone,
-                do_lower_case=args.do_lower_case)
+        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.raw_dataset)
@@ -266,7 +258,7 @@ class COMETEvaluator:
             else:
                 pred_frame = pred_turn[frame_idx]
 
-                count_dict = add_dicts(
+                count_dict = self._add_dicts(
                     count_dict,
                     self._evaluate_frame(
                         true_frame, pred_frame, strict=False, lowercase=lowercase
@@ -278,6 +270,21 @@ class COMETEvaluator:
 
     def _add_dicts(self, d1, d2):
         return {k: d1[k] + d2[k] for k in d1}
+
+
+    def _d_f1(self, n_true, n_pred, n_correct):
+        # 1/r + 1/p = 2/F1
+        # dr / r^2 + dp / p^2 = 2dF1 /F1^2
+        # dF1 = 1/2 F1^2 (dr/r^2 + dp/p^2) 
+        dr = self._b_stderr(n_true, n_correct)
+        dp = self._b_stderr(n_pred, n_correct)
+        
+        r = n_correct / n_true if n_true else 0
+        p = n_correct / n_pred if n_pred else 0
+        f1 = 2 * p * r / (p + r) if p + r != 0 else 0
+        
+        d_f1 = 0.5 * f1**2 * (dr / r**2 + dp / p**2) if p * r != 0 else 0
+        return d_f1
     
     def _evaluate_from_flat_list(self, d_true, d_pred, lowercase=False):
         
@@ -292,56 +299,53 @@ class COMETEvaluator:
             c = self._add_dicts(c, turn_evaluation)
 
         # Calculate metrics
-        try:
-            joint_accuracy = c['n_correct_beliefs'] / c['n_frames']
-
-            act_rec, act_prec, act_f1 = self._rec_prec_f1(
-                n_correct=c['n_correct_acts'],
-                n_true=c['n_true_acts'],
-                n_pred=c['n_pred_acts'])
-
-            slot_rec, slot_prec, slot_f1 = self._rec_prec_f1(
-                n_correct=c['n_correct_slots'],
-                n_true=c['n_true_slots'],
-                n_pred=c['n_pred_slots'])
-
-            request_slot_rec, request_slot_prec, request_slot_f1 = self._rec_prec_f1(
-                n_correct=c['n_correct_request_slots'],
-                n_true=c['n_true_request_slots'],
-                n_pred=c['n_pred_request_slots'])        
-
-            object_rec, object_prec, object_f1 = self._rec_prec_f1(
-                n_correct=c['n_correct_objects'],
-                n_true=c['n_true_objects'],
-                n_pred=c['n_pred_objects'])
-
-            # Calculate std err
-            act_f1_stderr = d_f1(c['n_true_acts'], c['n_pred_acts'], c['n_correct_acts'])
-            slot_f1_stderr = d_f1(c['n_true_slots'], c['n_pred_slots'], c['n_correct_slots'])
-            request_slot_f1_stderr = d_f1(c['n_true_request_slots'], c['n_pred_request_slots'], c['n_correct_request_slots'])        
-            object_f1_stderr = d_f1(c['n_true_objects'], c['n_pred_objects'], c['n_correct_objects'])
-            return {
-                'joint_accuracy': joint_accuracy,
-                'act_rec': act_rec,
-                'act_prec': act_prec,
-                'act_f1': act_f1,
-                'act_f1_stderr': act_f1_stderr,
-                'slot_rec': slot_rec,
-                'slot_prec': slot_prec,
-                'slot_f1': slot_f1,
-                'slot_f1_stderr': slot_f1_stderr,
-                'request_slot_rec': request_slot_rec,
-                'request_slot_prec': request_slot_prec,
-                'request_slot_f1': request_slot_f1,
-                'request_slot_f1_stderr': request_slot_f1_stderr,        
-                'object_rec': object_rec,
-                'object_prec': object_prec,
-                'object_f1': object_f1,
-                'object_f1_stderr': object_f1_stderr,        
-            }
-        except:
-            return c
-            
+        joint_accuracy = c['n_correct_beliefs'] / c['n_frames']
+        
+        act_rec, act_prec, act_f1 = self._rec_prec_f1(
+            n_correct=c['n_correct_acts'],
+            n_true=c['n_true_acts'],
+            n_pred=c['n_pred_acts'])
+        
+        slot_rec, slot_prec, slot_f1 = self._rec_prec_f1(
+            n_correct=c['n_correct_slots'],
+            n_true=c['n_true_slots'],
+            n_pred=c['n_pred_slots'])
+        
+        request_slot_rec, request_slot_prec, request_slot_f1 = self._rec_prec_f1(
+            n_correct=c['n_correct_request_slots'],
+            n_true=c['n_true_request_slots'],
+            n_pred=c['n_pred_request_slots'])        
+        
+        object_rec, object_prec, object_f1 = self._rec_prec_f1(
+            n_correct=c['n_correct_objects'],
+            n_true=c['n_true_objects'],
+            n_pred=c['n_pred_objects'])
+        
+        # Calculate std err
+        act_f1_stderr = self._d_f1(c['n_true_acts'], c['n_pred_acts'], c['n_correct_acts'])
+        slot_f1_stderr = self._d_f1(c['n_true_slots'], c['n_pred_slots'], c['n_correct_slots'])
+        request_slot_f1_stderr = self._d_f1(c['n_true_request_slots'], c['n_pred_request_slots'], c['n_correct_request_slots'])        
+        object_f1_stderr = self._d_f1(c['n_true_objects'], c['n_pred_objects'], c['n_correct_objects'])
+        
+        return {
+            'joint_accuracy': joint_accuracy,
+            'act_rec': act_rec,
+            'act_prec': act_prec,
+            'act_f1': act_f1,
+            'act_f1_stderr': act_f1_stderr,
+            'slot_rec': slot_rec,
+            'slot_prec': slot_prec,
+            'slot_f1': slot_f1,
+            'slot_f1_stderr': slot_f1_stderr,
+            'request_slot_rec': request_slot_rec,
+            'request_slot_prec': request_slot_prec,
+            'request_slot_f1': request_slot_f1,
+            'request_slot_f1_stderr': request_slot_f1_stderr,        
+            'object_rec': object_rec,
+            'object_prec': object_prec,
+            'object_f1': object_f1,
+            'object_f1_stderr': object_f1_stderr,        
+        }
 
     def _parse_flattened_results(self, lines):
         results = []
@@ -350,7 +354,14 @@ class COMETEvaluator:
             results.append(parsed)
         return results
 
-                
+    def _b_arr(self, n_total, n_pos):
+        out = np.zeros(int(n_total))
+        out[:int(n_pos)] = 1.0
+        return out
+    
+    def _b_stderr(self, n_total, n_pos):
+        return np.std(self._b_arr(n_total, n_pos)) / np.sqrt(n_total)
+    
     def _initialize_count_dict(self):
         c = {
             'n_frames': 0.0,
@@ -378,7 +389,7 @@ class COMETEvaluator:
         
         belief = []
 
-        splits = to_parse.strip().split(START_OF_API_CALL)
+        splits = to_parse.strip().split(END_OF_API_CALL)
         # to_parse: 'DIALOG_ACT_1 : [ SLOT_NAME = SLOT_VALUE, ... ] ...'
         if len(splits) == 2:
             for dialog_act in dialog_act_regex.finditer(to_parse):
@@ -424,13 +435,9 @@ class COMETEvaluator:
                 response_predicts.append(predict)
                 response_answers.append(answer)
 
-
         # EVALUATE DST
         dst_predicts_parsed = self._parse_flattened_results(dst_predicts)
         dst_answers_parsed = self._parse_flattened_results(dst_answers)
-
-        print(dst_predicts_parsed)
-        print(dst_answers_parsed)
         
         dst_results = self._evaluate_from_flat_list(dst_predicts_parsed, dst_answers_parsed)
 

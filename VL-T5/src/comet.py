@@ -31,12 +31,9 @@ _use_apex = False
 
 
 class Trainer(TrainerBase):
-    def __init__(self, args, train_loader=None, val_loader=None, test_loader=None, train=True):
+    def __init__(self, args, memories_to_coco_ids, coco_features, train=True):
         super().__init__(
             args,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
             train=train)
 
         if not self.verbose:
@@ -101,6 +98,42 @@ class Trainer(TrainerBase):
             start = time()
         self.model = self.model.to(args.gpu)
 
+        print('Building the train loader')
+        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
+        train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
+        self.train_loader = DataLoader(train_dataset,
+                                      batch_size=args.batch_size,
+                                      num_workers=args.num_workers,
+                                      pin_memory=True,
+                                      sampler=train_sampler,
+                                      collate_fn=train_dataset.collate_fn)
+    
+        print('Building the val loader')
+        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
+        val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        self.val_loader = DataLoader(val_dataset,
+                                    batch_size=args.valid_batch_size,
+                                    shuffle=False,
+                                    num_workers=args.num_workers,
+                                    pin_memory=True,
+                                    sampler=None,
+                                    collate_fn=val_dataset.collate_fn,
+                                    drop_last=False)
+
+        print('Building the test loader')
+        test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
+        test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        self.test_loader = DataLoader(test_dataset,
+                                    batch_size=args.valid_batch_size,
+                                    shuffle=False,
+                                    num_workers=args.num_workers,
+                                    pin_memory=True,
+                                    collate_fn=test_dataset.collate_fn,
+                                    sampler=None,
+                                    drop_last=False)
+
+        
         # Optimizer
         if train:
             self.optim, self.lr_scheduler = self.create_optimizer_and_scheduler()
@@ -386,7 +419,6 @@ class Trainer(TrainerBase):
                 losses = []
                 for result in dist_results:
                     losses.extend(result['loss'])
-            print(losses)
             results = {
                 'loss': np.mean(losses),
             }
@@ -420,42 +452,8 @@ def main(args):
     coco_features = h5py.File(args.coco_features_path, 'r')
 
     if args.do_train:
-        print('Building the train loader')
-        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
-        train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args)
-        train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
-        train_dataloader = DataLoader(train_dataset,
-                                      batch_size=args.batch_size,
-                                      num_workers=args.num_workers,
-                                      pin_memory=True,
-                                      sampler=train_sampler,
-                                      collate_fn=train_dataset.collate_fn)
-    
-        print('Building the val loader')
-        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
-        val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args)
-        val_dataloader = DataLoader(val_dataset,
-                                    batch_size=args.valid_batch_size,
-                                    shuffle=False,
-                                    num_workers=args.num_workers,
-                                    pin_memory=True,
-                                    sampler=None,
-                                    collate_fn=val_dataset.collate_fn,
-                                    drop_last=False)
-
-        print('Building the test loader')
-        test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
-        test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args)
-        test_dataloader = DataLoader(test_dataset,
-                                    batch_size=args.valid_batch_size,
-                                    shuffle=False,
-                                    num_workers=args.num_workers,
-                                    pin_memory=True,
-                                    collate_fn=test_dataset.collate_fn,
-                                    sampler=None,
-                                    drop_last=False)
         
-        trainer = Trainer(args, train_dataloader, val_dataloader, test_dataloader, train=True)
+        trainer = Trainer(args, memories_to_coco_ids, coco_features, train=True)
         trainer.train()
         
 

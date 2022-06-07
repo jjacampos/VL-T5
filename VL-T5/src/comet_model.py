@@ -63,7 +63,6 @@ class VLT5COMET(VLT5):
         self.eval()
         device = next(self.parameters()).device
         vis_feats = batch['vis_feats'].to(device)
-        print(vis_feats.shape)
         input_ids = batch['input_ids'].to(device)
         vis_pos = batch['boxes'].to(device)
 
@@ -242,8 +241,9 @@ class VLBartCOMET(VLBart):
             vis_attention_mask=vis_attention_mask,
             decoder_input_ids=decoder_input_ids,
         )
+        output = [element[element.index(self.tokenizer.bos_token_id)+1:element[1:].index(self.tokenizer.eos_token_id)+1]for element in output.cpu().tolist()]
+        generated_sents = self.tokenizer.batch_decode(output)
         
-        generated_sents = self.tokenizer.batch_decode(output, skip_special_tokens=True)
         return {'token_ids': output,
                 'pred': generated_sents}
 
