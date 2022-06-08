@@ -3,7 +3,6 @@ import random
 import json
 import copy
 import pdb
-import pdb
 import bert_score
 import nltk
 import tqdm
@@ -28,7 +27,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=False):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -41,6 +40,8 @@ class COMETFineTuneDataset(Dataset):
         self.feat_dim = args.feat_dim
         
         self.tokenizer = tokenizer
+
+        self.randomized_indexes = randomized_indexes
 
     def __len__(self):
         return len(self.raw_dataset)
@@ -100,9 +101,16 @@ class COMETFineTuneDataset(Dataset):
         out_dict = {'boxes':boxes,
                     'vis_feats': feats}
         
-        # Get the text features
-        input_sentence = example['predict']
-        target_sentence = example['target']
+        # Get the text features and remove the MEMORY BREAK tag
+        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
+        target_sentence = example['target'].replace(MEMORY_BREAK, '')
+
+        # Use local context for image ids
+        for index, memory in enumerate(list(set(memory_ids))):
+            input_sentence = input_sentence.replace(f'{memory}', f'<mem_{index}>')
+            target_sentence = target_sentence.replace(f'{memory}', f'<mem_{index}>')
+
+        
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
         out_dict['input_ids'] = torch.LongTensor(input_ids)

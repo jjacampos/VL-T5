@@ -55,7 +55,7 @@ class Trainer(TrainerBase):
             num_added_toks = 0
             if config.use_vis_order_embedding:
                 additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)]
+                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
                 special_tokens_dict = {
                     'additional_special_tokens': additional_special_tokens}
                 num_added_toks = self.tokenizer.add_special_tokens(
@@ -87,7 +87,10 @@ class Trainer(TrainerBase):
         # Add COMET special tokens
         comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
         comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
-        self.model.resize_token_embeddings(self.model.model.shared.num_embeddings + comet_added_tokens)
+        if 't5' in args.tokenizer:
+            self.model.resize_token_embeddings(self.model.shared.num_embeddings + comet_added_tokens)
+        else:
+            self.model.resize_token_embeddings(self.model.model.shared.num_embeddings + comet_added_tokens)
 
         self.model.tokenizer = self.tokenizer
         
