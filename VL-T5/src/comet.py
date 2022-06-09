@@ -104,7 +104,7 @@ class Trainer(TrainerBase):
         self.model = self.model.to(args.gpu)
 
         print('Building the train loader')
-        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))[:1000]
+        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
         train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
@@ -115,7 +115,7 @@ class Trainer(TrainerBase):
                                       collate_fn=train_dataset.collate_fn)
     
         print('Building the val loader')
-        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))[:100]
+        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
         val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         self.val_loader = DataLoader(val_dataset,
                                     batch_size=args.valid_batch_size,
@@ -127,7 +127,7 @@ class Trainer(TrainerBase):
                                     drop_last=False)
 
         print('Building the test loader')
-        test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))[:100]
+        test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
         test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         self.test_loader = DataLoader(test_dataset,
                                     batch_size=args.valid_batch_size,
@@ -168,9 +168,9 @@ class Trainer(TrainerBase):
 
             if not self.wandb_initialized:
                 if 't5' in self.args.backbone:
-                    project_name = "VLT5_COCOCaption"
+                    project_name = "VLT5_COMET"
                 elif 'bart' in self.args.backbone:
-                    project_name = "VLBart_COCOCaption"
+                    project_name = "VLBart_COMET"
 
                 wandb.init(project=project_name)
                 wandb.run.name = self.args.run_name

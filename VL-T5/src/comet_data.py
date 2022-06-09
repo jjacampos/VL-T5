@@ -27,7 +27,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=True):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=True, num_turns=2):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -42,6 +42,7 @@ class COMETFineTuneDataset(Dataset):
         self.tokenizer = tokenizer
 
         self.randomized_indexes = randomized_indexes
+        self.num_turns = num_turns
 
     def __len__(self):
         return len(self.raw_dataset)
@@ -86,9 +87,9 @@ class COMETFineTuneDataset(Dataset):
 
         return feats, boxes
         
-    
-    def __getitem__(self, idx):
 
+    # TODO many things can be moved to initialization
+    def __getitem__(self, idx):
 
         example = self.raw_dataset[idx]
         
@@ -110,23 +111,30 @@ class COMETFineTuneDataset(Dataset):
 
         # Get the img_order_ids
         img_order_ids = []
-        for i in range(len(memory_ids)):
+        for i in range(min(self.max_images, len(memory_ids))):
             img_order_ids += [order[i]] * self.n_boxes
 
         # Add one padding if we don't have memories in context
         if len(img_order_ids) == 0:
             img_order_ids += [self.max_images] * self.n_boxes
 
-        img_order_ids = torch.LongTensor(img_order_ids).view(max(1, len(memory_ids)), self.n_boxes)
-            
+        img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
+
         # Get the text features and remove the MEMORY BREAK tag
         input_sentence = example['predict'].replace(MEMORY_BREAK, '')
         target_sentence = example['target'].replace(MEMORY_BREAK, '')
+        
+        # Cut the amount of turns
+        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns+1:])
+        # Add USER tag at begining if we removed it
+        input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
 
         # Use local context for image ids
-        for index, memory in enumerate(memory_ids):
+        # Currently can be problematic if there are more than self.max_memory_ids in context as we could keep memory global index number on those
+        for index, memory in enumerate(memory_ids[:self.max_images]):
             input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
-            target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{[index]}>')
+            target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
+
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
         out_dict['input_ids'] = torch.LongTensor(input_ids)
@@ -467,8 +475,8 @@ class COMETEvaluator:
         dst_predicts_parsed = self._parse_flattened_results(dst_predicts)
         dst_answers_parsed = self._parse_flattened_results(dst_answers)
         
-        dst_results = self._evaluate_from_flat_list(dst_predicts_parsed, dst_answers_parsed)
-
+        #dst_results = self._evaluate_from_flat_list(dst_predicts_parsed, dst_answers_parsed)
+        dst_results = {}
         # EVALUATE RESPONSE GENERATION
         # Compute BLEU scores.
         bleu_scores = []
@@ -489,10 +497,15 @@ class COMETEvaluator:
                 )
                 bleu_scores.append(bleu_score)
 
-                _, _, bert_f1 = self.bert_scorer.score(
+
+                '''
+                _, _, bert_f1 = 0.0
+                self.bert_scorer.score(
                     [" ".join(response_clean)], [" ".join(gt_response_clean)]
                 )
                 bert_scores.append(bert_f1.item())
+                '''
+                bert_scores.append(0.0)
             except:
                 print(gt_response)
                 print("-->", response)
