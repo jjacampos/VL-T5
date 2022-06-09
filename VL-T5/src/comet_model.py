@@ -29,10 +29,7 @@ class VLT5COMET(VLT5):
         labels = batch['target_ids'].to(device)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
-
+        img_order_ids = batch['memory_order_ids'].to(device)
         img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
         img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
 

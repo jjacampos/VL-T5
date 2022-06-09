@@ -27,7 +27,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=False):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=True):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -52,7 +52,6 @@ class COMETFineTuneDataset(Dataset):
         feats_list = []
         boxes_list = []
 
-        
         for memory_id in memory_ids[:self.max_images]:
             # Features
             img_id = self.coco_mapping[memory_id].split('.jpg')[0]
@@ -90,27 +89,40 @@ class COMETFineTuneDataset(Dataset):
     
     def __getitem__(self, idx):
 
+
         example = self.raw_dataset[idx]
         
-        # Get memory ids from input
-        split_str = example['predict'].split(MEMORY_BREAK)
-        memory_ids = [int(element.rsplit(" ", 1)[-1]) for element in split_str[:-1]]
+        # Get non repeated but ordered memory ids from input
+        memory_ids = []
+        # We want memories in inverse order to ensure that last appeared are in features. 
+        for element in re.findall(f'(\d+)', example['predict'])[::-1]:
+            if int(element) in self.coco_mapping and int(element) not in memory_ids:
+                memory_ids.append(int(element))
 
+        order = [i for i in range(self.max_images)]
+        if self.randomized_indexes:
+            random.shuffle(order)
+            
         # Get the memory features
         feats, boxes = self._get_image_features(memory_ids)
         out_dict = {'boxes':boxes,
                     'vis_feats': feats}
-        
+
+        # Get the img_order_ids
+        img_order_ids = []
+        for i in range(len(memory_ids)):
+            img_order_ids += [order[i]] * self.n_boxes
+
         # Get the text features and remove the MEMORY BREAK tag
         input_sentence = example['predict'].replace(MEMORY_BREAK, '')
         target_sentence = example['target'].replace(MEMORY_BREAK, '')
 
         # Use local context for image ids
-        for index, memory in enumerate(list(set(memory_ids))):
-            input_sentence = input_sentence.replace(f'{memory}', f'<mem_{index}>')
-            target_sentence = target_sentence.replace(f'{memory}', f'<mem_{index}>')
+        for index, memory in enumerate(memory_ids):
+            input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
+            target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{[index]}>')
+        print(input_sentence, self.tokenizer.encode(input_sentence), img_order_ids)
 
-        
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
         out_dict['input_ids'] = torch.LongTensor(input_ids)
