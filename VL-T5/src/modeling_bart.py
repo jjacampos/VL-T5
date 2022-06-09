@@ -110,7 +110,6 @@ class VisualEmbedding(nn.Module):
         # [B, N, d_model]
         absolute_vis_pos_embedding = self.absolute_vis_pos_embedding(pos)
 
-        pdb.set_trace()
         
         if self.config.use_vis_order_embedding:
             if img_order_ids is None:

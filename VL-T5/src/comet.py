@@ -104,7 +104,7 @@ class Trainer(TrainerBase):
         self.model = self.model.to(args.gpu)
 
         print('Building the train loader')
-        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
+        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))[:3000]
         train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
@@ -115,7 +115,7 @@ class Trainer(TrainerBase):
                                       collate_fn=train_dataset.collate_fn)
     
         print('Building the val loader')
-        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
+        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))[:100]
         val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         self.val_loader = DataLoader(val_dataset,
                                     batch_size=args.valid_batch_size,
@@ -297,7 +297,7 @@ class Trainer(TrainerBase):
 
             # Validation
             valid_results = self.validate(self.val_loader)
-            valid_metrics = self.evaluate(self.val_loader)
+            valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
 
             if self.verbose:
                 valid_score = valid_results['loss']
@@ -339,7 +339,7 @@ class Trainer(TrainerBase):
             wandb.save(best_path, base_path=self.args.output)
             print(f'\nUploaded checkpoint {best_epoch}', best_path)
 
-        test_results = self.evaluate(self.test_loader)
+        test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
 
         if self.verbose:
             wandb_log_dict = {}
@@ -384,11 +384,11 @@ class Trainer(TrainerBase):
 
                 predictions.extend(results['pred'])
 
-                if 'targets' in batch:
-                    targets.extend(batch['targets'])
+                if 'examples' in batch:
+                    examples.extend(batch['examples'])
             results = {
                 'predictions': predictions,
-                'targets': targets
+                'examples': examples
             }
 
             if self.args.distributed:
@@ -398,10 +398,10 @@ class Trainer(TrainerBase):
                 targets = []
                 for result in dist_results:
                     predictions.extend(result['predictions'])
-                    targets.extend(result['targets'])
+                    examples.extend(result['examples'])
                 results = {
                     'predictions': predictions,
-                    'targets': targets
+                    'examples': examples
                 }
             return results
 
@@ -429,15 +429,15 @@ class Trainer(TrainerBase):
             }
             return results
         
-    def evaluate(self, loader):
+    def evaluate(self, loader, gt_path, output_path):
 
         results = self.predict(loader)
 
         predictions = results['predictions']
         print('# predictions:', len(predictions))
-        targets = results['targets']
+        examples = results['examples']
         evaluator = self.evaluator
-        eval_results = evaluator.evaluate(predictions, targets)
+        eval_results = evaluator.evaluate(predictions, examples, gt_path, output_path)
         return eval_results
 
         
