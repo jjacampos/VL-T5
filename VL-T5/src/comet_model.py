@@ -29,9 +29,7 @@ class VLT5COMET(VLT5):
         labels = batch['target_ids'].to(device)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = batch['memory_order_ids'].to(device)
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
@@ -76,12 +74,8 @@ class VLT5COMET(VLT5):
         vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
 
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
@@ -124,12 +118,7 @@ class VLT5COMET(VLT5):
         vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
-
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
@@ -179,12 +168,7 @@ class VLBartCOMET(VLBart):
         labels = batch['target_ids'].to(device)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
-
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
@@ -229,12 +213,7 @@ class VLBartCOMET(VLBart):
         vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
-
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
@@ -277,12 +256,8 @@ class VLBartCOMET(VLBart):
         vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = []
-        for i in range(context_images_amount):
-            img_order_ids += [i] * n_boxes
+        img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
-        img_order_ids = torch.tensor(img_order_ids, dtype=torch.long, device=device)
-        img_order_ids = img_order_ids.view(1, context_images_amount*n_boxes).expand(B, -1)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)

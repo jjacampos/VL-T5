@@ -113,6 +113,12 @@ class COMETFineTuneDataset(Dataset):
         for i in range(len(memory_ids)):
             img_order_ids += [order[i]] * self.n_boxes
 
+        # Add one padding if we don't have memories in context
+        if len(img_order_ids) == 0:
+            img_order_ids += [self.max_images] * self.n_boxes
+
+        img_order_ids = torch.LongTensor(img_order_ids).view(max(1, len(memory_ids)), self.n_boxes)
+            
         # Get the text features and remove the MEMORY BREAK tag
         input_sentence = example['predict'].replace(MEMORY_BREAK, '')
         target_sentence = example['target'].replace(MEMORY_BREAK, '')
@@ -121,8 +127,6 @@ class COMETFineTuneDataset(Dataset):
         for index, memory in enumerate(memory_ids):
             input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
             target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{[index]}>')
-        print(input_sentence, self.tokenizer.encode(input_sentence), img_order_ids)
-
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
         out_dict['input_ids'] = torch.LongTensor(input_ids)
@@ -130,7 +134,7 @@ class COMETFineTuneDataset(Dataset):
         target_ids = self.tokenizer.encode(target_sentence)
         out_dict['target_ids'] = torch.LongTensor(target_ids)
         out_dict['targets'] = target_sentence
-        
+        out_dict['img_order_ids'] = img_order_ids
         return out_dict
 
 
@@ -150,6 +154,8 @@ class COMETFineTuneDataset(Dataset):
         vis_feats = torch.zeros(B, max_images_context, num_boxes, feats_dim, dtype=torch.float)
         vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
         target_ids = torch.ones(B, max_target_len, dtype=torch.long) * self.tokenizer.pad_token_id
+        # Use img id that we will never encounter as padding for ids. 
+        img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.max_images
 
         for i, entry in enumerate(batch):
             # If the amount of context images is greater than one
@@ -159,6 +165,7 @@ class COMETFineTuneDataset(Dataset):
             boxes[i,:entry['boxes'].size(0)] += entry['boxes']
             vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
             target_ids[i, :len(entry['target_ids'])] = entry['target_ids']
+            img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']
 
         word_mask = target_ids != self.tokenizer.pad_token_id
         target_ids[~word_mask] = -100
@@ -168,7 +175,8 @@ class COMETFineTuneDataset(Dataset):
                 'vis_attention_mask': vis_attention_mask,
                 'input_ids': input_ids,
                 'target_ids': target_ids,
-                'targets': [elem['targets'] for elem in batch]}
+                'targets': [elem['targets'] for elem in batch],
+                'img_order_ids': img_order_ids}
     
 
 class COMETEvaluator:
