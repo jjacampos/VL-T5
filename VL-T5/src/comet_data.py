@@ -1,4 +1,5 @@
 from collections import defaultdict
+from convert import parse_flattened_result
 import re
 import os
 import random
@@ -146,7 +147,7 @@ class COMETFineTuneDataset(Dataset):
         target_ids = self.tokenizer.encode(target_sentence)
         out_dict['target_ids'] = torch.LongTensor(target_ids)
         # Get the mapping back from id to memory        
-        example['mapping'] = [(memory, idx) for memory, idx in zip(memory_idx[:self.max_images], order)]
+        example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids[:self.max_images], order)]
         out_dict['example'] = example
         out_dict['img_order_ids'] = img_order_ids
         return out_dict
@@ -194,24 +195,27 @@ class COMETFineTuneDataset(Dataset):
     
 
 class COMETEvaluator:
-                
-    def __init__(self):
-        from convert import parse_flattened_result
 
-    def _output_dst(self, predictions, examples):
+    def _output_dst(self, predictions, examples, response_path):
 
-        dialogues = defaultdict(ist)
+        dialogues = defaultdict(list)
         for prediction, example in zip(predictions, examples):
             if example['type'] == 'API':
-                parsed_format = parse_flattened_result(f'{START_OF_API_CALL} {prediction}')
-                parsed_format['turn_idx'] = example['turn_id']
-                dialog_id = example['dialog_id']
-                dialogues[dialog_id].append(parsed_format)
+                try:
+                    parsed_format = parse_flattened_result(f'{START_OF_API_CALL} {prediction}')
+                    turn_id = example['turn_id']
+                    dialog_id = example['dialog_id']
+                    parsed_format[0]['turn_idx'] = turn_id
+                    dialogues[dialog_id].append({'transcript_annotated': parsed_format})
+                except:
+                    # In case of problem 
+                    print(prediction)
+
                 
-        output_data = [{'dialog_idx': key,'predictions': value }for (key, value) in dialogues.items()]        
-        json.dump(output_data, open(self.response_path, 'w', encoding='utf-8'))
+        output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value}for (key, value) in dialogues.items()]}
+        json.dump(output_data, open(response_path, 'w', encoding='utf-8'))
         
-    def _output_response(self, predictions, examples):
+    def _output_response(self, predictions, examples, dst_path):
 
         dialogues = defaultdict(list)
         for prediction, example in zip(predictions, examples):
@@ -220,24 +224,28 @@ class COMETEvaluator:
                 dialogues[dialog_id].append({'turn_idx': example['turn_id'],
                                              'response': prediction})
 
-        output_data = [{'dialog_idx': key,'predictions': value }for (key, value) in dialogues.items()]        
-        json.dump(output_data, open(self.dst_path, 'w', encoding='utf-8'))
+        output_data = [{'dialog_idx': key,'predictions': value }for (key, value) in dialogues.items()]
+        json.dump(output_data, open(dst_path, 'w', encoding='utf-8'))
                 
     
     def evaluate(self, predicts, examples, test_file, output_path):
-        pdb.set_trace()
+
+        test_file = test_file.replace('_gpt2', '')
         # Recover global indexes
-        for i in range(len(predictions)):
+        for i in range(len(predicts)):
             for mapping in examples[i]['mapping']:
-                prediction = prediction.replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
+                predicts[i] = predicts[i].replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
         self._output_dst(predicts, examples, os.path.join(output_path, 'dst.json'))
         self._output_response(predicts, examples, os.path.join(output_path, 'response.json'))
                 
         # Call the evaluation script
-        os.system(f"python3 response_evaluation.py --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'response.json')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/response_evaluation.py \
+        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'response.json')}")
 
-        os.system(f"python3 evaluate_dst.py --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')} --output_path_report {os.path.join(output_file, 'report.out')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/evaluate_dst.py \
+        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')} --output_path_report {os.path.join(output_path, 'report.out')}")
 
+        return {'None': 0.0}
         
 
 

@@ -60,10 +60,10 @@ def evaluate_response_generation(
 
     num_evaluations = 0
     for model_datum in tqdm.tqdm(model_responses, desc="Evaluating"):
-        dialog_id = model_datum["dialog_id"]
+        dialog_id = model_datum["dialog_idx"]
         num_gt_rounds = len(gt_responses_pool[dialog_id]["dialogue"])
         for round_datum in model_datum["predictions"]:
-            round_id = round_datum["turn_id"]
+            round_id = round_datum["turn_idx"]
             # Skip if single_round_eval and this is not the last round.
             if single_round_eval and round_id != num_gt_rounds - 1:
                 continue

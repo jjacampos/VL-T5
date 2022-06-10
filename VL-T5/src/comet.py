@@ -104,7 +104,7 @@ class Trainer(TrainerBase):
         self.model = self.model.to(args.gpu)
 
         print('Building the train loader')
-        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))[:3000]
+        train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
         train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
@@ -115,7 +115,7 @@ class Trainer(TrainerBase):
                                       collate_fn=train_dataset.collate_fn)
     
         print('Building the val loader')
-        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))[:100]
+        val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
         val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
         self.val_loader = DataLoader(val_dataset,
                                     batch_size=args.valid_batch_size,
@@ -157,10 +157,22 @@ class Trainer(TrainerBase):
         if self.verbose:
             print(f'It took {time() - start:.1f}s')
 
+        
         # Initialize evaluator
         self.evaluator = COMETEvaluator()
             
     def train(self):
+
+        # If we just want to evalute
+        if self.args.do_test:
+             # Test Set
+            best_path = os.path.join(self.args.output, 'BEST')
+            self.load(best_path)
+
+            test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
+
+            return -1
+
         if self.verbose:
             loss_meter = LossMeter()
             best_valid = 0.
@@ -366,7 +378,7 @@ class Trainer(TrainerBase):
         self.model.eval()
         with torch.no_grad():
             predictions = []
-            targets = []
+            examples = []
 
             gen_kwargs = {}
             gen_kwargs['num_beams'] = self.args.num_beams
@@ -395,7 +407,7 @@ class Trainer(TrainerBase):
                 dist.barrier()
                 dist_results = dist_utils.all_gather(results)
                 predictions = []
-                targets = []
+                examples = []
                 for result in dist_results:
                     predictions.extend(result['predictions'])
                     examples.extend(result['examples'])

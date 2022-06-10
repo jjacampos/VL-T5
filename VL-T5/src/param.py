@@ -110,7 +110,7 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--n_boxes', type=int, default=36)
     parser.add_argument('--max_n_boxes', type=int, default=36)
-    parser.add_argument('--max_text_length', type=int, default=20)
+    parser.add_argument('--max_text_length', type=int, default=80)
 
     # Training
     parser.add_argument('--batch_size', type=int, default=256)
