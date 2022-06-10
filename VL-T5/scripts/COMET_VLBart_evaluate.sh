@@ -12,7 +12,8 @@ torchrun  --nproc_per_node=$1 \
 	--coco_features_path /fsx/jacampos/data/COCO_Features/COCO/features/train2014_obj36.h5 \
 	--special_tokens_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_special_tokens.json \
 	--do_train \
-	--optim adamw \
+	--do_test \
+        --optim adamw \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \

@@ -165,7 +165,6 @@ class Trainer(TrainerBase):
 
         # If we just want to evalute
         if self.args.do_test:
-             # Test Set
             best_path = os.path.join(self.args.output, 'BEST')
             self.load(best_path)
 

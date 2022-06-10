@@ -103,7 +103,7 @@ class COMETFineTuneDataset(Dataset):
             if int(element) in self.coco_mapping and int(element) not in memory_ids:
                 memory_ids.append(int(element))
 
-        order = [i for i in range(self.max_images)]
+        order = [i for i in range(len(memory_ids))]
         if self.randomized_indexes:
             random.shuffle(order)
             
@@ -119,7 +119,7 @@ class COMETFineTuneDataset(Dataset):
 
         # Add one padding if we don't have memories in context
         if len(img_order_ids) == 0:
-            img_order_ids += [self.max_images] * self.n_boxes
+            img_order_ids += [self.tokenizer.pad_token_id] * self.n_boxes
 
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
@@ -133,12 +133,9 @@ class COMETFineTuneDataset(Dataset):
         input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
 
         # Use local context for image ids
-        # Currently can be problematic if there are more than self.max_memory_ids in context as we could keep memory global index number on those
-        for index, memory in enumerate(memory_ids[:self.max_images]):
+        for index, memory in enumerate(memory_ids):
             input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
             target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
-
-
             
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
@@ -147,7 +144,7 @@ class COMETFineTuneDataset(Dataset):
         target_ids = self.tokenizer.encode(target_sentence)
         out_dict['target_ids'] = torch.LongTensor(target_ids)
         # Get the mapping back from id to memory        
-        example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids[:self.max_images], order)]
+        example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids, order)]
         out_dict['example'] = example
         out_dict['img_order_ids'] = img_order_ids
         return out_dict
@@ -169,8 +166,8 @@ class COMETFineTuneDataset(Dataset):
         vis_feats = torch.zeros(B, max_images_context, num_boxes, feats_dim, dtype=torch.float)
         vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
         target_ids = torch.ones(B, max_target_len, dtype=torch.long) * self.tokenizer.pad_token_id
-        # Use img id that we will never encounter as padding for ids. 
-        img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.max_images
+        # Use pad token for img_order ids padding. 
+        img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
 
         for i, entry in enumerate(batch):
             # If the amount of context images is greater than one
@@ -199,6 +196,7 @@ class COMETEvaluator:
     def _output_dst(self, predictions, examples, response_path):
 
         dialogues = defaultdict(list)
+        prev_parsed = {}
         for prediction, example in zip(predictions, examples):
             if example['type'] == 'API':
                 try:
@@ -208,8 +206,14 @@ class COMETEvaluator:
                     parsed_format[0]['turn_idx'] = turn_id
                     dialogues[dialog_id].append({'transcript_annotated': parsed_format})
                 except:
-                    # In case of problem 
+                    # In case of problem just repeat previous parsed
                     print(prediction)
+                    turn_id = example['turn_id']
+                    dialog_id = example['dialog_id']
+                    parsed_format[0]['turn_idx'] = turn_id
+                    dialogues[dialog_id].append({'transcript_annotated': prev_parsed})
+
+                prev_parsed = parsed_format
 
                 
         output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value}for (key, value) in dialogues.items()]}
