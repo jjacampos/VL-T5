@@ -46,6 +46,8 @@ class COMETFineTuneDataset(Dataset):
 
         self.randomized_indexes = randomized_indexes
         self.num_turns = num_turns
+
+        self.args = args
         
     def __len__(self):
         return len(self.raw_dataset)
@@ -138,7 +140,8 @@ class COMETFineTuneDataset(Dataset):
             target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
             
         # TODO use different tokens for API and normal generation now just using "comet" as input
-        input_ids = self.tokenizer.encode(f'comet: {input_sentence}')
+        input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
+            max_length=self.args.max_text_length, truncation=True)
         out_dict['input_ids'] = torch.LongTensor(input_ids)
 
         target_ids = self.tokenizer.encode(target_sentence)
@@ -170,6 +173,7 @@ class COMETFineTuneDataset(Dataset):
         img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
 
         for i, entry in enumerate(batch):
+
             # If the amount of context images is greater than one
             if not(entry['boxes'].size(0) == 1 and torch.all(entry['boxes']==0)):
                 vis_attention_mask[i,:entry['boxes'].size(0)] = 1
@@ -196,7 +200,6 @@ class COMETEvaluator:
     def _output_dst(self, predictions, examples, response_path):
 
         dialogues = defaultdict(list)
-        prev_parsed = {}
         for prediction, example in zip(predictions, examples):
             if example['type'] == 'API':
                 try:
@@ -206,17 +209,10 @@ class COMETEvaluator:
                     parsed_format[0]['turn_idx'] = turn_id
                     dialogues[dialog_id].append({'transcript_annotated': parsed_format})
                 except:
-                    # In case of problem just repeat previous parsed
+                    # In case of error print that generation
                     print(prediction)
-                    turn_id = example['turn_id']
-                    dialog_id = example['dialog_id']
-                    parsed_format[0]['turn_idx'] = turn_id
-                    dialogues[dialog_id].append({'transcript_annotated': prev_parsed})
-
-                prev_parsed = parsed_format
-
                 
-        output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value}for (key, value) in dialogues.items()]}
+        output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value} for (key, value) in dialogues.items()]}
         json.dump(output_data, open(response_path, 'w', encoding='utf-8'))
         
     def _output_response(self, predictions, examples, dst_path):
@@ -235,6 +231,7 @@ class COMETEvaluator:
     def evaluate(self, predicts, examples, test_file, output_path):
 
         test_file = test_file.replace('_gpt2', '')
+        
         # Recover global indexes
         for i in range(len(predicts)):
             for mapping in examples[i]['mapping']:
@@ -242,14 +239,17 @@ class COMETEvaluator:
         self._output_dst(predicts, examples, os.path.join(output_path, 'dst.json'))
         self._output_response(predicts, examples, os.path.join(output_path, 'response.json'))
                 
-        # Call the evaluation script
+        # Call the evaluation scripts
         os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/response_evaluation.py \
         --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'response.json')}")
 
         os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/evaluate_dst.py \
-        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')} --output_path_report {os.path.join(output_path, 'report.out')}")
+        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')}\
+         --output_path_report {os.path.join(output_path, 'report.out')}")
 
-        return {'None': 0.0}
+        output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
+
+        return output_report
         
 
 

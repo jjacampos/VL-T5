@@ -264,11 +264,13 @@ class VLBartCOMET(VLBart):
 
         decoder_input_ids = torch.ones(B, 1, dtype=torch.long, device=device) * self.config.decoder_start_token_id
         
+        
         output = self.generate(
             input_ids=input_ids,
             vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),
             vis_attention_mask=vis_attention_mask,
             decoder_input_ids=decoder_input_ids,
+            **kwargs
         )
         output = [element[element.index(self.tokenizer.bos_token_id)+1:element[1:].index(self.tokenizer.eos_token_id)+1]for element in output.cpu().tolist()]
         generated_sents = self.tokenizer.batch_decode(output)
