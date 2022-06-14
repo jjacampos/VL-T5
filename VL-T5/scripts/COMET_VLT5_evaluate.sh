@@ -22,8 +22,7 @@ torchrun  --nproc_per_node=$1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \
         --epochs 20 \
-        --num_workers 4 \
-	--local_rank 0 \
+        --num_workers 8 \
         --backbone 't5-base' \
         --output /fsx/jacampos/experiments/vl-seq2seq/output_t5 \
         --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 \

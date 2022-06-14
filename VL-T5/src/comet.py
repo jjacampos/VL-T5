@@ -30,6 +30,17 @@ _use_native_amp = False
 _use_apex = False
 
 
+# Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
+if version.parse(torch.__version__) < version.parse("1.6"):
+    from transormers.file_utils import is_apex_available
+    if is_apex_available():
+        from apex import amp
+    _use_apex = True
+else:
+    _use_native_amp = True
+    from torch.cuda.amp import autocast
+
+
 class Trainer(TrainerBase):
     def __init__(self, args, memories_to_coco_ids, coco_features, train=True):
         super().__init__(
@@ -51,22 +62,23 @@ class Trainer(TrainerBase):
 
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
-        if 'bart' in self.args.tokenizer:
-            num_added_toks = 0
-            if config.use_vis_order_embedding:
-                additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
-                special_tokens_dict = {
-                    'additional_special_tokens': additional_special_tokens}
-                num_added_toks = self.tokenizer.add_special_tokens(
-                    special_tokens_dict)
+       
+        num_added_toks = 0
+        if config.use_vis_order_embedding:
+            additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
+            special_tokens_dict = {
+                'additional_special_tokens': additional_special_tokens}
+            num_added_toks = self.tokenizer.add_special_tokens(
+                special_tokens_dict)
 
-                config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids(
-                    [f'<vis_extra_id_{i}>' for i in range(100)])
+            config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids(
+                [f'<vis_extra_id_{i}>' for i in range(100)])
 
         self.model = self.create_model(model_class, config, **model_kwargs)
         if 't5' in self.args.tokenizer:
-            self.model.resize_token_embeddings(self.tokenizer.vocab_size)
+            print(num_added_toks)
+            self.model.resize_token_embeddings(self.tokenizer.vocab_size + num_added_toks)
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(
                 self.model.model.shared.num_embeddings + num_added_toks)
@@ -75,27 +87,26 @@ class Trainer(TrainerBase):
                 assert self.model.model.shared.weight is self.model.lm_head.weight
                 assert self.model.model.shared.weight is self.model.model.encoder.visual_embedding.obj_order_embedding.weight
 
-
-        
         # Load Checkpoint
         self.start_epoch = None
         if args.load is not None:
             ckpt_path = args.load + '.pth'
             self.load_checkpoint(ckpt_path)
 
-
         # Add COMET special tokens
         comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
+        if 't5' in self.args.tokenizer:
+            comet_special_tokens['additional_special_tokens'] += '<'
+            comet_special_tokens['additional_special_tokens'] += [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
+
         comet_special_tokens['additional_special_tokens'] += [f'<mem_id_{i}>' for i in range(100-1, -1, -1)]
         comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
-        if 't5' in args.tokenizer:
-            self.model.resize_token_embeddings(self.model.shared.num_embeddings + comet_added_tokens)
-        else:
-            self.model.resize_token_embeddings(self.model.model.shared.num_embeddings + comet_added_tokens)
+
+        self.model.resize_token_embeddings(len(self.tokenizer))
 
         self.model.tokenizer = self.tokenizer
 
-        
         # GPU Options
         print(f'Model Launching at GPU {self.args.gpu}')
         if self.verbose:
@@ -452,10 +463,10 @@ class Trainer(TrainerBase):
         return eval_results
 
         
-def main(args):
+def main(gpu, args):
 
-    args.gpu = args.local_rank
-    
+    args.gpu = gpu
+    args.rank = gpu
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
         dist.init_process_group(backend='nccl')
@@ -474,11 +485,12 @@ def main(args):
         
 
 if __name__ == '__main__':
+
     cudnn.benchmark = True
     args = parse_args()
     ngpus_per_node = torch.cuda.device_count()
     args.world_size = ngpus_per_node
-    
+
     if args.local_rank in [0, -1]:
         print(args)
 
@@ -500,6 +512,4 @@ if __name__ == '__main__':
         args.run_name = run_name
 
     if args.distributed:
-        main(args)
-
-    
+        main(args.local_rank, args)

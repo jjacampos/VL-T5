@@ -108,7 +108,7 @@ class TrainerBase(object):
         if 't5' in self.args.tokenizer:
             if self.args.use_vision:
                 # tokenizer_class = VLT5Tokenizer
-                tokenizer_class = VLT5TokenizerFast
+                tokenizer_class = T5Tokenizer
             else:
                 # tokenizer_class = T5Tokenizer
                 tokenizer_class = T5TokenizerFast

@@ -7,9 +7,7 @@ import pdb
 from modeling_t5 import VLT5
 
 class VLT5COMET(VLT5):
-    def __init__(self, config):
-        super().__init__(config)
-
+    
     def __init__(self, config):
         super().__init__(config)
 
@@ -74,7 +72,6 @@ class VLT5COMET(VLT5):
         vis_pos = batch['boxes'].to(device).view(B, context_images_amount*n_boxes, 4)
         vis_attention_mask = batch['vis_attention_mask'].to(device).view(B, context_images_amount*n_boxes)
 
-
         img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
@@ -120,30 +117,25 @@ class VLT5COMET(VLT5):
 
         img_order_ids = batch['img_order_ids'].to(device).view(B, context_images_amount*n_boxes)
 
+
         obj_order_ids = torch.arange(n_boxes, dtype=torch.long, device=device)
         obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes)
 
         decoder_input_ids = torch.ones(B, 1, dtype=torch.long, device=device) * self.config.decoder_start_token_id
+        
         
         output = self.generate(
             input_ids=input_ids,
             vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),
             vis_attention_mask=vis_attention_mask,
             decoder_input_ids=decoder_input_ids,
+            **kwargs
         )
-
-        processed = []
-        for element in output.cpu().tolist():
-            try:
-                processed.append(element[1:element[1:].index(self.tokenizer.eos_token_id)+1])
-            except:
-                processed.append(element)
-            
-        generated_sents = self.tokenizer.batch_decode(processed)
+        output = [element[element.index(self.tokenizer.pad_token_id)+1:element[1:].index(self.tokenizer.eos_token_id)+1]for element in output.cpu().tolist()]
+        generated_sents = self.tokenizer.batch_decode(output)
         
         return {'token_ids': output,
-                'pred': generated_sents}
-        
+                'pred': generated_sents}        
         
 from modeling_bart import VLBart
 

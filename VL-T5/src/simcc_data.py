@@ -1,4 +1,5 @@
 from collections import defaultdict
+from convert import parse_flattened_result
 import re
 import os
 import random
@@ -15,17 +16,12 @@ import pdb
 from transformers import T5TokenizerFast, BartTokenizer
 from tokenization import VLT5TokenizerFast
 
-MEMORY_BREAK = "<MM_BREAK>"
+# Templates for GPT-2 formatting
 START_OF_MULTIMODAL_CONTEXTS = '<SOM>'
 END_OF_MULTIMODAL_CONTEXTS = '<EOM>'
-START_OF_API_CALL = '=> <SOAC>:'
-END_OF_API_CALL = '<EOAC>'
-START_OF_API_RESULT = '<SOAR>'
-END_OF_API_RESULT = '<EOAR>'
-START_OF_RESPONSE = "<SOR>"
+START_BELIEF_STATE = '=> Belief State :'
+END_OF_BELIEF = '<EOB>'
 END_OF_SENTENCE = '<EOS>'
-SYSTEM = '<SYSTEM>'
-USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
@@ -61,17 +57,14 @@ class COMETFineTuneDataset(Dataset):
             # Features
             img_id = self.coco_mapping[memory_id].split('.jpg')[0]
             feats = np.zeros(shape=(self.n_boxes, self.feat_dim), dtype=np.float32)
-            # Get the top n_boxes taking prob into account
-            indexes = (-self.coco_features[f'{img_id}/attr_conf'][()]).argsort()[:self.n_boxes]
-            feats = self.coco_features[f'{img_id}/features'][()][indexes]
-            #self.coco_features[f'{img_id}/features'][()][indexes].read_direct(feats)
+            self.coco_features[f'{img_id}/features'].read_direct(feats)
             feats_list.append(feats)
 
             # BBoxes
             img_h = self.coco_features[f'{img_id}/img_h'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
-            boxes = self.coco_features[f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
+            boxes = self.coco_features[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
             np.testing.assert_array_less(boxes, 1+1e-5)
@@ -99,9 +92,9 @@ class COMETFineTuneDataset(Dataset):
     def __getitem__(self, idx):
 
         example = self.raw_dataset[idx]
+        
         # Get non repeated but ordered memory ids from input
         memory_ids = []
-        
         # We want memories in inverse order to ensure that last appeared are in features. 
         for element in re.findall(f'(\d+)', example['predict'])[::-1]:
             if int(element) in self.coco_mapping and int(element) not in memory_ids:
@@ -198,35 +191,56 @@ class COMETFineTuneDataset(Dataset):
     
 
 class COMETEvaluator:
+
+    def _output_dst(self, predictions, examples, response_path):
+
+        dialogues = defaultdict(list)
+        for prediction, example in zip(predictions, examples):
+            if example['type'] == 'API':
+                try:
+                    parsed_format = parse_flattened_result(f'{START_OF_API_CALL} {prediction}')
+                    turn_id = example['turn_id']
+                    dialog_id = example['dialog_id']
+                    parsed_format[0]['turn_idx'] = turn_id
+                    dialogues[dialog_id].append({'transcript_annotated': parsed_format})
+                except:
+                    # In case of error print that generation
+                    print(prediction)
+                
+        output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value} for (key, value) in dialogues.items()]}
+        json.dump(output_data, open(response_path, 'w', encoding='utf-8'))
+        
+    def _output_response(self, predictions, examples, dst_path):
+
+        dialogues = defaultdict(list)
+        for prediction, example in zip(predictions, examples):
+            if example['type'] == 'RESPONSE':
+                dialog_id = example['dialog_id']
+                dialogues[dialog_id].append({'turn_idx': example['turn_id'],
+                                             'response': prediction})
+
+        output_data = [{'dialog_idx': key,'predictions': value }for (key, value) in dialogues.items()]
+        json.dump(output_data, open(dst_path, 'w', encoding='utf-8'))
+                
     
     def evaluate(self, predicts, examples, test_file, output_path):
 
         test_file = test_file.replace('_gpt2', '')
-        
+        pdb.set_trace()
         # Recover global indexes
         for i in range(len(predicts)):
-            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '')
             for mapping in examples[i]['mapping']:
-                cur_pred = cur_pred.replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
-            # If there are still mem_ids in the pred but there were no mapping in context remove them. 
-            remaining = re.findall('(<mem_id_[0-9]*>)', predicts[i])
-            for to_remove in remaining:
-                cur_pred = cur_pred.replace(to_remove, '')
-            examples[i]['model_prediction'] = cur_pred
-
-        # Output the model predictions
-        json.dump(examples, open(os.path.join(output_path, 'predictions.json'), 'w'))
-        
+                predicts[i] = predicts[i].replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
+        self._output_dst(predicts, examples, os.path.join(output_path, 'dst.json'))
+        self._output_response(predicts, examples, os.path.join(output_path, 'response.json'))
+                
         # Call the evaluation scripts
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/create_results_json_memory.py \
-            --memory_test_json {test_file} --model_output_json {os.path.join(output_path, 'predictions.json')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/response_evaluation.py \
+        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'response.json')}")
 
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/response_evaluation_memory.py \
-        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'predictions_response_results.json')}")
-
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/evaluate_dst_memory.py \
-        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'predictions_dst_results.json')}\
-        --output_path_report {os.path.join(output_path, 'report.out')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/evaluate_dst.py \
+        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')}\
+         --output_path_report {os.path.join(output_path, 'report.out')}")
 
         output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
 

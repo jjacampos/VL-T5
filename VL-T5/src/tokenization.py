@@ -75,6 +75,10 @@ class VLT5Tokenizer(T5Tokenizer):
             match = re.match(r"<vis_extra_id_(\d+)>", token)
             num = int(match.group(1))
             return self.vocab_size - num - 1
+        elif token.startswith("<mem_id_"):
+            match = re.match(r"<mem_id_(\d+)>", token)
+            num = int(match.group(1))
+            return self.vocab_size + (100 - num) - 1 
         return self.sp_model.piece_to_id(token)
 
     def _convert_id_to_token(self, index):

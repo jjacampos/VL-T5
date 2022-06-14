@@ -130,7 +130,7 @@ class VisualEmbedding(nn.Module):
                 obj_order_ids = obj_order_ids.unsqueeze(0)
             # print('raw obj_order_ids', obj_order_ids)
             # CHANGE THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
-            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 100 -  1
+            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 113 -  1
             # print('re-indexed obj_order_ids', obj_order_ids)
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
 

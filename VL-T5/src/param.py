@@ -110,7 +110,7 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--n_boxes', type=int, default=36)
     parser.add_argument('--max_n_boxes', type=int, default=36)
-    parser.add_argument('--max_text_length', type=int, default=300)
+    parser.add_argument('--max_text_length', type=int, default=256)
 
     # Training
     parser.add_argument('--batch_size', type=int, default=200)
@@ -137,7 +137,7 @@ def parse_args(parse=True, **optional_kwargs):
 
     # Inference
     parser.add_argument('--num_beams', type=int, default=1)
-    parser.add_argument('--gen_max_length', type=int, default=100)
+    parser.add_argument('--gen_max_length', type=int, default=256)
 
     # Data
     parser.add_argument('--caption_only', action='store_true')

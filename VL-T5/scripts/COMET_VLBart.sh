@@ -1,8 +1,9 @@
 # Run this script by passing the number of processes as first argument
 export TRANSFORMERS_CACHE=/fsx/jacampos/experiments/vl-seq2seq/transformers
-
-torchrun  --nproc_per_node=$1 \
-    ../src/comet.py \
+python -m torch.distributed.launch \
+        --nproc_per_node=$1 \
+        --master_port=1234 \
+        ../src/comet.py \
         --distributed --multiGPU \
         --train_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_train.json \
         --valid_path  /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_val.json \
@@ -16,13 +17,12 @@ torchrun  --nproc_per_node=$1 \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \
-        --epochs 20 \
-        --num_workers 4 \
-	--local_rank 0 \
+        --epochs 10 \
+        --num_workers 1 \
         --backbone 'facebook/bart-base' \
         --output /fsx/jacampos/experiments/vl-seq2seq/output \
         --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 \
         --num_beams 5 \
         --batch_size 40 \
         --valid_batch_size 100 \
-	#--n_boxes 10 \
+	--n_boxes 10 \
