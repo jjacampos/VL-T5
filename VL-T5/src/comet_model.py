@@ -15,7 +15,6 @@ class VLT5COMET(VLT5):
     def train_step(self, batch):
 
         device = next(self.parameters()).device
-
         input_ids = batch['input_ids'].to(device)
         B = len(input_ids)
         feat_dim = batch['vis_feats'].size(3)

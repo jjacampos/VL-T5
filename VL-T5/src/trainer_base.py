@@ -3,6 +3,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import os
+import pdb
 import collections
 from pathlib import Path
 from packaging import version
@@ -108,7 +109,7 @@ class TrainerBase(object):
         if 't5' in self.args.tokenizer:
             if self.args.use_vision:
                 # tokenizer_class = VLT5Tokenizer
-                tokenizer_class = T5Tokenizer
+                tokenizer_class = T5TokenizerFast
             else:
                 # tokenizer_class = T5Tokenizer
                 tokenizer_class = T5TokenizerFast
@@ -117,7 +118,6 @@ class TrainerBase(object):
             # tokenizer_class = BartTokenizerFast
 
         tokenizer_name = self.args.backbone
-
         tokenizer = tokenizer_class.from_pretrained(
             tokenizer_name,
             max_length=self.args.max_text_length,

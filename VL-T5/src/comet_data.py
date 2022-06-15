@@ -3,11 +3,6 @@ import re
 import os
 import random
 import json
-import copy
-import pdb
-import bert_score
-import nltk
-import tqdm
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -29,7 +24,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=True, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=False, num_turns=2):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -128,7 +123,7 @@ class COMETFineTuneDataset(Dataset):
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
         # Get the text features and remove the MEMORY BREAK tag
-        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
+        input_sentence = example['predict']
         target_sentence = example['target'].replace(MEMORY_BREAK, '')
         
         # Cut the amount of turns
@@ -138,8 +133,8 @@ class COMETFineTuneDataset(Dataset):
 
         # Use local context for image ids
         for index, memory in enumerate(memory_ids):
-            input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
-            target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
+            input_sentence = input_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
+            target_sentence = target_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
             
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
@@ -205,11 +200,11 @@ class COMETEvaluator:
         
         # Recover global indexes
         for i in range(len(predicts)):
-            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '')
+            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('< EOAC>', '').replace('< EOS>', '')
             for mapping in examples[i]['mapping']:
-                cur_pred = cur_pred.replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
+                cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
             # If there are still mem_ids in the pred but there were no mapping in context remove them. 
-            remaining = re.findall('(<mem_id_[0-9]*>)', predicts[i])
+            remaining = re.findall('(mem_id_[0-9]*)', predicts[i])
             for to_remove in remaining:
                 cur_pred = cur_pred.replace(to_remove, '')
             examples[i]['model_prediction'] = cur_pred

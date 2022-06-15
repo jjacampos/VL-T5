@@ -62,7 +62,7 @@ class Trainer(TrainerBase):
 
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
-       
+        
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
@@ -76,8 +76,8 @@ class Trainer(TrainerBase):
                 [f'<vis_extra_id_{i}>' for i in range(100)])
 
         self.model = self.create_model(model_class, config, **model_kwargs)
+
         if 't5' in self.args.tokenizer:
-            print(num_added_toks)
             self.model.resize_token_embeddings(self.tokenizer.vocab_size + num_added_toks)
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(
@@ -97,10 +97,8 @@ class Trainer(TrainerBase):
         comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
         if 't5' in self.args.tokenizer:
             comet_special_tokens['additional_special_tokens'] += '<'
-            comet_special_tokens['additional_special_tokens'] += [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
-
-        comet_special_tokens['additional_special_tokens'] += [f'<mem_id_{i}>' for i in range(100-1, -1, -1)]
+            
+        comet_special_tokens['additional_special_tokens'] += [f'mem_id_{i}' for i in range(100-1, -1, -1)]
         comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
 
         self.model.resize_token_embeddings(len(self.tokenizer))
