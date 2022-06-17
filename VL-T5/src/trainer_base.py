@@ -87,6 +87,9 @@ class TrainerBase(object):
         config.share_vis_lang_layer_norm = args.share_vis_lang_layer_norm
         config.classifier = args.classifier
 
+        # Config parameters for COMET
+        config.use_mem_ids = args.use_mem_ids
+
         return config
 
 

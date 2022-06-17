@@ -64,9 +64,9 @@ class VisualEmbedding(nn.Module):
 
             if self.config.use_vis_order_embedding:
                 self.obj_order_embedding = obj_order_embedding
-                self.img_order_embedding = nn.Embedding(n_images, config.d_model)
+                # self.img_order_embedding = nn.Embedding(n_images, config.d_model)
 
-                self.default_obj_order_ids = self.config.default_obj_order_ids
+                # self.default_obj_order_ids = self.config.default_obj_order_ids
 
             if self.config.use_vis_layer_norm:
                 self.layer_norm = nn.LayerNorm(config.d_model)
@@ -116,8 +116,9 @@ class VisualEmbedding(nn.Module):
                 img_order_ids = torch.zeros(N, dtype=torch.long, device=device)
                 img_order_ids = img_order_ids.unsqueeze(0)  # .expand(B, -1)
             # HERE IS THE CHANGE FOR ADDING WORD EMBEDDING TO IMAGE
-            img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
-            img_order_embedding = self.obj_order_embedding(img_order_ids)
+            if self.config.use_mem_ids:
+                img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
+                img_order_embedding = self.obj_order_embedding(img_order_ids)
 
             # if obj_order_ids is None:
             #     obj_order_ids = torch.tensor(self.default_obj_order_ids[:N], dtype=torch.long, device=device)
@@ -129,13 +130,16 @@ class VisualEmbedding(nn.Module):
                 obj_order_ids = torch.arange(N, dtype=torch.long, device=device)
                 obj_order_ids = obj_order_ids.unsqueeze(0)
             # print('raw obj_order_ids', obj_order_ids)
-            # CHANGE THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
+            # CHANGED THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
             obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 113 -  1
             # print('re-indexed obj_order_ids', obj_order_ids)
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
-
-            vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
-                img_order_embedding + obj_order_embedding
+            if self.config.use_mem_ids:
+                vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
+                    img_order_embedding + obj_order_embedding
+            else:
+                vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
+                    obj_order_embedding
 
         else:
             vis_embedding = feat_embedding + absolute_vis_pos_embedding

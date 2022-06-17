@@ -24,7 +24,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=False, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, num_turns=2):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -38,7 +38,7 @@ class COMETFineTuneDataset(Dataset):
         
         self.tokenizer = tokenizer
 
-        self.randomized_indexes = randomized_indexes
+        self.randomization_type = args.randomization
         self.num_turns = num_turns
 
         self.args = args
@@ -94,18 +94,33 @@ class COMETFineTuneDataset(Dataset):
     def __getitem__(self, idx):
 
         example = self.raw_dataset[idx]
+
+        # Get the text features and remove the MEMORY BREAK tag
+        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
+        target_sentence = example['target'].replace(MEMORY_BREAK, '')
+        
+        # Cut the amount of turns
+        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns+1:])
+        # Add USER tag at begining if we removed it
+        input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
+
         # Get non repeated but ordered memory ids from input
         memory_ids = []
-        
-        # We want memories in inverse order to ensure that last appeared are in features. 
+
+        # We want memories in inverse order to ensure that last ones are added as features. 
         for element in re.findall(f'(\d+)', example['predict'])[::-1]:
             if int(element) in self.coco_mapping and int(element) not in memory_ids:
                 memory_ids.append(int(element))
 
-        order = [i for i in range(len(memory_ids))]
-        if self.randomized_indexes:
+        order = [i for i in range(self.max_images)]
+
+        if self.randomization_type == 'random_global':
             random.shuffle(order)
-            
+        elif self.randomization_type == 'random_local':
+            for_randomization = order[:len(memory_ids)]
+            random.shuffle(for_randomization)
+            order[:len(memory_ids)] = for_randomization
+
         # Get the memory features
         feats, boxes = self._get_image_features(memory_ids)
         out_dict = {'boxes':boxes,
@@ -122,20 +137,16 @@ class COMETFineTuneDataset(Dataset):
 
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
-        # Get the text features and remove the MEMORY BREAK tag
-        input_sentence = example['predict']
-        target_sentence = example['target'].replace(MEMORY_BREAK, '')
-        
-        # Cut the amount of turns
-        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns+1:])
-        # Add USER tag at begining if we removed it
-        input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
-
         # Use local context for image ids
-        for index, memory in enumerate(memory_ids):
+        for index, memory in enumerate(memory_ids[:self.max_images]):
             input_sentence = input_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
             target_sentence = target_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
-            
+
+        # If the target memory is not in the context just use mem_id_99 as unknown for consistency
+        for element in re.findall(f'(\d+)', target_sentence):
+            if int(element) in self.coco_mapping:
+                target_sentence = target_sentence.replace(f'{memory}', 'mem_id_99')
+        
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
             max_length=self.args.max_text_length, truncation=True)
@@ -197,7 +208,7 @@ class COMETEvaluator:
     def evaluate(self, predicts, examples, test_file, output_path):
 
         test_file = test_file.replace('_gpt2', '')
-        
+        correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes
         for i in range(len(predicts)):
             cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('< EOAC>', '').replace('< EOS>', '')
@@ -206,9 +217,14 @@ class COMETEvaluator:
             # If there are still mem_ids in the pred but there were no mapping in context remove them. 
             remaining = re.findall('(mem_id_[0-9]*)', predicts[i])
             for to_remove in remaining:
+                if to_remove == 'mem_id_99':
+                    correct_unknown += 1
+                else:
+                    incorrect_unknown += 1
                 cur_pred = cur_pred.replace(to_remove, '')
             examples[i]['model_prediction'] = cur_pred
-
+        
+        
         # Output the model predictions
         json.dump(examples, open(os.path.join(output_path, 'predictions.json'), 'w'))
         
@@ -224,6 +240,8 @@ class COMETEvaluator:
         --output_path_report {os.path.join(output_path, 'report.out')}")
 
         output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
+
+        print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown} // Accuracy: {correct_unknown/(correct_unknown+incorrect_unknown)}')
 
         return output_report
         

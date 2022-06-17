@@ -146,7 +146,6 @@ class Trainer(TrainerBase):
                                     collate_fn=test_dataset.collate_fn,
                                     sampler=None,
                                     drop_last=False)
-
         
         # Optimizer
         if train:

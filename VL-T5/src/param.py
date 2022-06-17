@@ -56,20 +56,7 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--seed', type=int, default=9595, help='random seed')
 
-    # Added params for COMET
-    parser.add_argument("--train_path", required=True)
-    parser.add_argument("--valid_path", required=True)
-    parser.add_argument("--test_path", default=None)
-    parser.add_argument("--special_tokens_path", default=None)
 
-    parser.add_argument("--coco_annotations_path", required=True)
-    parser.add_argument("--memory_files", required=True, nargs='+')
-    parser.add_argument("--coco_features_path", required=True)
-
-    parser.add_argument('--do_train', action='store_true')
-    parser.add_argument('--do_test', action='store_true')
-
-    parser.add_argument('--n_images', type=int, default=8)
     
     # Data Splits
     parser.add_argument("--train", default='train')
@@ -139,7 +126,7 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--num_beams', type=int, default=1)
     parser.add_argument('--gen_max_length', type=int, default=256)
 
-    # Data
+    # Datacom
     parser.add_argument('--caption_only', action='store_true')
     parser.add_argument('--coco_only', action='store_true')
     parser.add_argument('--caption_cocoonly', default=True, type=str2bool)
@@ -172,6 +159,24 @@ def parse_args(parse=True, **optional_kwargs):
     # Multitask
     parser.add_argument("--multitask_sampling", type=str, default='roundrobin')
     parser.add_argument("--tasks", type=str, default='')
+
+    # COMET
+    parser.add_argument("--train_path", required=True)
+    parser.add_argument("--valid_path", required=True)
+    parser.add_argument("--test_path", default=None)
+    parser.add_argument("--special_tokens_path", default=None)
+
+    parser.add_argument("--coco_annotations_path", required=True)
+    parser.add_argument("--memory_files", required=True, nargs='+')
+    parser.add_argument("--coco_features_path", required=True)
+
+    parser.add_argument('--do_train', action='store_true')
+    parser.add_argument('--do_test', action='store_true')
+
+    parser.add_argument('--n_images', type=int, default=8)
+
+    parser.add_argument('--randomization', default='no_random', choices=['random_global', 'random_local', 'no_random'])
+    parser.add_argument('--use_mem_ids', action='store_true')
 
     # Etc.
     parser.add_argument('--comment', type=str, default='')
