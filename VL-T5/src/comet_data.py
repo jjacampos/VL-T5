@@ -100,7 +100,7 @@ class COMETFineTuneDataset(Dataset):
         target_sentence = example['target'].replace(MEMORY_BREAK, '')
         
         # Cut the amount of turns
-        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns+1:])
+        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns-1:])
         # Add USER tag at begining if we removed it
         input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
 
@@ -108,7 +108,7 @@ class COMETFineTuneDataset(Dataset):
         memory_ids = []
 
         # We want memories in inverse order to ensure that last ones are added as features. 
-        for element in re.findall(f'(\d+)', example['predict'])[::-1]:
+        for element in re.findall(f'(\d+)', input_sentence)[::-1]:
             if int(element) in self.coco_mapping and int(element) not in memory_ids:
                 memory_ids.append(int(element))
 
@@ -143,8 +143,8 @@ class COMETFineTuneDataset(Dataset):
             target_sentence = target_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
 
         # If the target memory is not in the context just use mem_id_99 as unknown for consistency
-        for element in re.findall(f'(\d+)', target_sentence):
-            if int(element) in self.coco_mapping:
+        for memory in re.findall(f'(\d+)', target_sentence):
+            if int(memory) in self.coco_mapping:
                 target_sentence = target_sentence.replace(f'{memory}', 'mem_id_99')
         
         # TODO use different tokens for API and normal generation now just using "comet" as input
@@ -211,11 +211,12 @@ class COMETEvaluator:
         correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes
         for i in range(len(predicts)):
+            orig_prediction = predicts[i]
             cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('< EOAC>', '').replace('< EOS>', '')
             for mapping in examples[i]['mapping']:
                 cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
             # If there are still mem_ids in the pred but there were no mapping in context remove them. 
-            remaining = re.findall('(mem_id_[0-9]*)', predicts[i])
+            remaining = re.findall('(mem_id_[0-9]*)', cur_pred)
             for to_remove in remaining:
                 if to_remove == 'mem_id_99':
                     correct_unknown += 1
@@ -223,6 +224,7 @@ class COMETEvaluator:
                     incorrect_unknown += 1
                 cur_pred = cur_pred.replace(to_remove, '')
             examples[i]['model_prediction'] = cur_pred
+            examples[i]['original_prediction'] = orig_prediction
         
         
         # Output the model predictions

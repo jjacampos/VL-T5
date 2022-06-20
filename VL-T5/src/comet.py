@@ -210,7 +210,7 @@ class Trainer(TrainerBase):
         epochs = self.args.epochs
 
         for epoch in range(epochs):
-
+            
             if self.start_epoch is not None:
                 epoch += self.start_epoch
             self.model.train()
