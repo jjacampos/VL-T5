@@ -135,7 +135,7 @@ class VisualEmbedding(nn.Module):
                     img_order_embedding + obj_order_embedding
             else:
                 vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
-                img_order_embedding + obj_order_embedding
+                    obj_order_embedding
 
         else:
             vis_embedding = feat_embedding + absolute_vis_pos_embedding
