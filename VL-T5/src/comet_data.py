@@ -6,11 +6,9 @@ import json
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, Dataset, Sampler
-import pdb
 from transformers import T5TokenizerFast, BartTokenizer
 from tokenization import VLT5TokenizerFast
 
-MEMORY_BREAK = "<MM_BREAK>"
 START_OF_MULTIMODAL_CONTEXTS = '<SOM>'
 END_OF_MULTIMODAL_CONTEXTS = '<EOM>'
 START_OF_API_CALL = '=> <SOAC>:'
@@ -95,9 +93,9 @@ class COMETFineTuneDataset(Dataset):
 
         example = self.raw_dataset[idx]
 
-        # Get the text features and remove the MEMORY BREAK tag
-        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
-        target_sentence = example['target'].replace(MEMORY_BREAK, '')
+        # Get the text features 
+        input_sentence = example['predict']
+        target_sentence = example['target']
         
         # Cut the amount of turns
         input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns-1:])
@@ -121,9 +119,11 @@ class COMETFineTuneDataset(Dataset):
             random.shuffle(for_randomization)
             order[:len(memory_ids)] = for_randomization
 
+        out_dict = {}
         # Get the memory features
-        feats, boxes = self._get_image_features(memory_ids)
-        out_dict = {'boxes':boxes,
+        if not self.args.just_text_features:
+            feats, boxes = self._get_image_features(memory_ids)
+            out_dict = {'boxes':boxes,
                     'vis_feats': feats}
 
         # Get the img_order_ids
@@ -139,13 +139,13 @@ class COMETFineTuneDataset(Dataset):
 
         # Use local context for image ids
         for index, memory in enumerate(memory_ids[:self.max_images]):
-            input_sentence = input_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
-            target_sentence = target_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
+            input_sentence = input_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
+            target_sentence = target_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
 
         # If the target memory is not in the context just use mem_id_99 as unknown for consistency
         for memory in re.findall(f'(\d+)', target_sentence):
             if int(memory) in self.coco_mapping:
-                target_sentence = target_sentence.replace(f'{memory}', 'mem_id_99')
+                target_sentence = target_sentence.replace(f'{memory}', ' mem_id_99 ')
         
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
@@ -165,43 +165,51 @@ class COMETFineTuneDataset(Dataset):
 
         # Do padding for text and images
         B = len(batch)
-        num_boxes = batch[0]['boxes'].size(1)
         max_input_len = max(len(entry['input_ids']) for entry in batch)
         max_target_len = max(len(entry['target_ids']) for entry in batch)
-        max_images_context = max(entry['vis_feats'].size(0) for entry in batch)
-        feats_dim = batch[0]['vis_feats'].size(-1)
+        input_ids = torch.ones(B, max_input_len, dtype=torch.long) * self.tokenizer.pad_token_id  
+        target_ids = torch.ones(B, max_target_len, dtype=torch.long) * self.tokenizer.pad_token_id      
 
-        input_ids = torch.ones(B, max_input_len, dtype=torch.long) * self.tokenizer.pad_token_id
-
-        boxes = torch.zeros(B, max_images_context, num_boxes, 4, dtype=torch.float)
-        vis_feats = torch.zeros(B, max_images_context, num_boxes, feats_dim, dtype=torch.float)
-        vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
-        target_ids = torch.ones(B, max_target_len, dtype=torch.long) * self.tokenizer.pad_token_id
-        # Use pad token for img_order ids padding. 
-        img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
+        if not self.args.just_text_features:
+            num_boxes = batch[0]['boxes'].size(1)
+            max_images_context = max(entry['vis_feats'].size(0) for entry in batch)
+            feats_dim = batch[0]['vis_feats'].size(-1)
+            boxes = torch.zeros(B, max_images_context, num_boxes, 4, dtype=torch.float)
+            vis_feats = torch.zeros(B, max_images_context, num_boxes, feats_dim, dtype=torch.float)
+            vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
+            # Use pad token for img_order ids padding. 
+            img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
 
         for i, entry in enumerate(batch):
+            input_ids[i, :len(entry['input_ids'])] = entry['input_ids']            
+            target_ids[i, :len(entry['target_ids'])] = entry['target_ids']                
 
-            # If the amount of context images is greater than one
-            if not(entry['boxes'].size(0) == 1 and torch.all(entry['boxes']==0)):
-                vis_attention_mask[i,:entry['boxes'].size(0)] = 1
-            input_ids[i, :len(entry['input_ids'])] = entry['input_ids']
-            boxes[i,:entry['boxes'].size(0)] += entry['boxes']
-            vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
-            target_ids[i, :len(entry['target_ids'])] = entry['target_ids']
-            img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']
+            if not self.args.just_text_features:
+                # If the amount of context images is greater than one
+                if not(entry['boxes'].size(0) == 1 and torch.all(entry['boxes']==0)):
+                    vis_attention_mask[i,:entry['boxes'].size(0)] = 1
+                boxes[i,:entry['boxes'].size(0)] += entry['boxes']
+                vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
+                img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']
 
         word_mask = target_ids != self.tokenizer.pad_token_id
         target_ids[~word_mask] = -100
 
-        return {'boxes': boxes,
-                'vis_feats': vis_feats,
-                'vis_attention_mask': vis_attention_mask,
-                'input_ids': input_ids,
+        out_dict = {'input_ids': input_ids,
                 'target_ids': target_ids,
                 'examples': [elem['example'] for elem in batch],
-                'img_order_ids': img_order_ids}
+                }
     
+        if not self.args.just_text_features:
+            out_dict =  {'boxes': boxes,
+                'vis_feats': vis_feats,
+                'vis_attention_mask': vis_attention_mask,
+                'img_order_ids': img_order_ids,
+                'input_ids': input_ids,
+                'target_ids': target_ids,
+                'examples': [elem['example'] for elem in batch]}
+    
+        return out_dict
 
 class COMETEvaluator:
     
@@ -212,7 +220,7 @@ class COMETEvaluator:
         # Recover global indexes
         for i in range(len(predicts)):
             orig_prediction = predicts[i]
-            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('< EOAC>', '').replace('< EOS>', '')
+            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '')
             for mapping in examples[i]['mapping']:
                 cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
             # If there are still mem_ids in the pred but there were no mapping in context remove them. 
@@ -241,8 +249,10 @@ class COMETEvaluator:
         --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'predictions_dst_results.json')}\
         --output_path_report {os.path.join(output_path, 'report.out')}")
 
-        output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
-
+        try:
+            output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
+        except:
+            output_report = {}
         print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown} // Accuracy: {correct_unknown/(correct_unknown+incorrect_unknown)}')
 
         return output_report

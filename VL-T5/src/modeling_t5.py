@@ -8,7 +8,6 @@ from transformers.models.t5.modeling_t5 import (
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-import pdb 
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import copy
@@ -121,14 +120,17 @@ class VisualEmbedding(nn.Module):
                 img_order_ids = img_order_ids.unsqueeze(0) #.expand(B, -1)
             # HERE IS THE CHANGE FOR ADDING WORD EMBEDDING TO IMAGE
             if self.config.use_mem_ids:
-                img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
-                img_order_embedding = self.obj_order_embedding(img_order_ids)                       
+                if self.config.match_text_image:
+                    img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
+                    img_order_embedding = self.obj_order_embedding(img_order_ids)
+                else:
+                    img_order_embedding = self.img_order_embedding(img_order_ids)                 
             if obj_order_ids is None:
                 obj_order_ids = torch.arange(N, dtype=torch.long, device=device)
                 obj_order_ids = obj_order_ids.unsqueeze(0) #.expand(B,-1)
             # assert obj_order_ids.max().item() < 32200, obj_order_ids
             # CHANGE THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
-            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 114 - 1
+            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 116 - 1
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
             if self.config.use_mem_ids:
                 vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
@@ -197,26 +199,30 @@ class JointEncoder(T5Stack):
 
         B, L = inputs_embeds.size()[:-1]
 
-        vis_feats = vis_inputs[0]
-        boxes = vis_inputs[1]
-        img_order_ids = None
-        obj_order_ids = None
-        if len(vis_inputs) >= 3:
-            img_order_ids = vis_inputs[2]
-        if len(vis_inputs) == 4:
-            obj_order_ids = vis_inputs[3]
+        if vis_inputs is None:
+            vis_embeds = torch.Tensor().to(inputs_embeds.device)
+            vis_attention_mask = torch.Tensor().to(inputs_embeds.device)
+            V_L = 0
+        else:
+            vis_feats = vis_inputs[0]
+            boxes = vis_inputs[1]
+            img_order_ids = None
+            obj_order_ids = None
+            if len(vis_inputs) >= 3:
+                img_order_ids = vis_inputs[2]
+            if len(vis_inputs) == 4:
+                obj_order_ids = vis_inputs[3]
 
-        vis_embeds = self.visual_embedding(
-            vis_feats, boxes, img_order_ids, obj_order_ids)
+            vis_embeds = self.visual_embedding(vis_feats, boxes, img_order_ids, obj_order_ids)
 
-        V_L = vis_embeds.size(1)
+            V_L = vis_embeds.size(1)
 
         inputs_embeds = torch.cat([inputs_embeds, vis_embeds], dim=1)
 
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
 
-        if vis_attention_mask is None:
+        if vis_attention_mask is None and not vis_inputs is None:
             vis_attention_mask = attention_mask.new_ones(B, V_L)
 
         attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
@@ -359,7 +365,6 @@ class VLT5(T5ForConditionalGeneration):
         encoder_config.is_encoder_decoder = False
 
         #---- Modified ----#
-        # self.encoder = T5Stack(encoder_config, self.shared)
         self.encoder = JointEncoder(encoder_config, self.shared)
         #------------------#
 
@@ -442,7 +447,6 @@ class VLT5(T5ForConditionalGeneration):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
-
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -486,8 +490,9 @@ class VLT5(T5ForConditionalGeneration):
             B, L = attention_mask.size()
             V_L = encoder_outputs[0].size(1) - L
             vis_attention_mask = attention_mask.new_ones(B, V_L)
-        encoder_attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
 
+        encoder_attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
+        
         # Decode
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,

@@ -55,8 +55,7 @@ def parse_args(parse=True, **optional_kwargs):
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--seed', type=int, default=9595, help='random seed')
-
-
+    parser.add_argument('--run_name', type=str, help='Run name for wand')
     
     # Data Splits
     parser.add_argument("--train", default='train')
@@ -177,6 +176,9 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--randomization', default='no_random', choices=['random_global', 'random_local', 'no_random'])
     parser.add_argument('--use_mem_ids', action='store_true')
+    parser.add_argument('--match_text_image', action='store_true')
+    parser.add_argument('--just_text_features', action='store_true')
+    parser.add_argument('--just_text_model', action='store_true')
 
     # Etc.
     parser.add_argument('--comment', type=str, default='')

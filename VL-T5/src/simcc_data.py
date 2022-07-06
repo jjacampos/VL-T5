@@ -25,7 +25,7 @@ END_OF_SENTENCE = '<EOS>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, randomized_indexes=True, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, num_turns=2):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -39,7 +39,7 @@ class COMETFineTuneDataset(Dataset):
         
         self.tokenizer = tokenizer
 
-        self.randomized_indexes = randomized_indexes
+        self.randomization_type = args.randomization
         self.num_turns = num_turns
 
         self.args = args
@@ -57,14 +57,17 @@ class COMETFineTuneDataset(Dataset):
             # Features
             img_id = self.coco_mapping[memory_id].split('.jpg')[0]
             feats = np.zeros(shape=(self.n_boxes, self.feat_dim), dtype=np.float32)
-            self.coco_features[f'{img_id}/features'].read_direct(feats)
+            # Get the top n_boxes taking prob into account
+            indexes = (-self.coco_features[f'{img_id}/attr_conf'][()]).argsort()[:self.n_boxes]
+            feats = self.coco_features[f'{img_id}/features'][()][indexes]
+            #self.coco_features[f'{img_id}/features'][()][indexes].read_direct(feats)
             feats_list.append(feats)
 
             # BBoxes
             img_h = self.coco_features[f'{img_id}/img_h'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
-            boxes = self.coco_features[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
+            boxes = self.coco_features[f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
             np.testing.assert_array_less(boxes, 1+1e-5)
@@ -92,18 +95,33 @@ class COMETFineTuneDataset(Dataset):
     def __getitem__(self, idx):
 
         example = self.raw_dataset[idx]
+
+        # Get the text features and remove the MEMORY BREAK tag
+        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
+        target_sentence = example['target'].replace(MEMORY_BREAK, '')
         
+        # Cut the amount of turns
+        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns-1:])
+        # Add USER tag at begining if we removed it
+        input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
+
         # Get non repeated but ordered memory ids from input
         memory_ids = []
-        # We want memories in inverse order to ensure that last appeared are in features. 
-        for element in re.findall(f'(\d+)', example['predict'])[::-1]:
+
+        # We want memories in inverse order to ensure that last ones are added as features. 
+        for element in re.findall(f'(\d+)', input_sentence)[::-1]:
             if int(element) in self.coco_mapping and int(element) not in memory_ids:
                 memory_ids.append(int(element))
 
-        order = [i for i in range(len(memory_ids))]
-        if self.randomized_indexes:
+        order = [i for i in range(self.max_images)]
+
+        if self.randomization_type == 'random_global':
             random.shuffle(order)
-            
+        elif self.randomization_type == 'random_local':
+            for_randomization = order[:len(memory_ids)]
+            random.shuffle(for_randomization)
+            order[:len(memory_ids)] = for_randomization
+
         # Get the memory features
         feats, boxes = self._get_image_features(memory_ids)
         out_dict = {'boxes':boxes,
@@ -120,20 +138,16 @@ class COMETFineTuneDataset(Dataset):
 
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
-        # Get the text features and remove the MEMORY BREAK tag
-        input_sentence = example['predict'].replace(MEMORY_BREAK, '')
-        target_sentence = example['target'].replace(MEMORY_BREAK, '')
-        
-        # Cut the amount of turns
-        input_sentence = USER.join(input_sentence.split(USER)[-self.num_turns+1:])
-        # Add USER tag at begining if we removed it
-        input_sentence = USER + input_sentence if input_sentence[:6] != USER else input_sentence
-
         # Use local context for image ids
-        for index, memory in enumerate(memory_ids):
-            input_sentence = input_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
-            target_sentence = target_sentence.replace(f'{memory}', f'<mem_id_{order[index]}>')
-            
+        for index, memory in enumerate(memory_ids[:self.max_images]):
+            input_sentence = input_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
+            target_sentence = target_sentence.replace(f'{memory}', f'mem_id_{order[index]}')
+
+        # If the target memory is not in the context just use mem_id_99 as unknown for consistency
+        for memory in re.findall(f'(\d+)', target_sentence):
+            if int(memory) in self.coco_mapping:
+                target_sentence = target_sentence.replace(f'{memory}', 'mem_id_99')
+        
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
             max_length=self.args.max_text_length, truncation=True)
@@ -191,58 +205,46 @@ class COMETFineTuneDataset(Dataset):
     
 
 class COMETEvaluator:
-
-    def _output_dst(self, predictions, examples, response_path):
-
-        dialogues = defaultdict(list)
-        for prediction, example in zip(predictions, examples):
-            if example['type'] == 'API':
-                try:
-                    parsed_format = parse_flattened_result(f'{START_OF_API_CALL} {prediction}')
-                    turn_id = example['turn_id']
-                    dialog_id = example['dialog_id']
-                    parsed_format[0]['turn_idx'] = turn_id
-                    dialogues[dialog_id].append({'transcript_annotated': parsed_format})
-                except:
-                    # In case of error print that generation
-                    print(prediction)
-                
-        output_data = {'dialogue_data':[{'dialogue_idx': key,'dialogue': value} for (key, value) in dialogues.items()]}
-        json.dump(output_data, open(response_path, 'w', encoding='utf-8'))
-        
-    def _output_response(self, predictions, examples, dst_path):
-
-        dialogues = defaultdict(list)
-        for prediction, example in zip(predictions, examples):
-            if example['type'] == 'RESPONSE':
-                dialog_id = example['dialog_id']
-                dialogues[dialog_id].append({'turn_idx': example['turn_id'],
-                                             'response': prediction})
-
-        output_data = [{'dialog_idx': key,'predictions': value }for (key, value) in dialogues.items()]
-        json.dump(output_data, open(dst_path, 'w', encoding='utf-8'))
-                
     
     def evaluate(self, predicts, examples, test_file, output_path):
 
         test_file = test_file.replace('_gpt2', '')
-        pdb.set_trace()
+        correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes
         for i in range(len(predicts)):
+            orig_prediction = predicts[i]
+            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('< EOAC>', '').replace('< EOS>', '')
             for mapping in examples[i]['mapping']:
-                predicts[i] = predicts[i].replace(f'<mem_id_{mapping[1]}>', f'{mapping[0]}')
-        self._output_dst(predicts, examples, os.path.join(output_path, 'dst.json'))
-        self._output_response(predicts, examples, os.path.join(output_path, 'response.json'))
-                
+                cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
+            # If there are still mem_ids in the pred but there were no mapping in context remove them. 
+            remaining = re.findall('(mem_id_[0-9]*)', cur_pred)
+            for to_remove in remaining:
+                if to_remove == 'mem_id_99':
+                    correct_unknown += 1
+                else:
+                    incorrect_unknown += 1
+                cur_pred = cur_pred.replace(to_remove, '')
+            examples[i]['model_prediction'] = cur_pred
+            examples[i]['original_prediction'] = orig_prediction
+        
+        
+        # Output the model predictions
+        json.dump(examples, open(os.path.join(output_path, 'predictions.json'), 'w'))
+        
         # Call the evaluation scripts
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/response_evaluation.py \
-        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'response.json')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/create_results_json_memory.py \
+            --memory_test_json {test_file} --model_output_json {os.path.join(output_path, 'predictions.json')}")
 
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/src/evaluate_dst.py \
-        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'dst.json')}\
-         --output_path_report {os.path.join(output_path, 'report.out')}")
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/response_evaluation_memory.py \
+        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'predictions_response_results.json')}")
+
+        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/evaluate_dst_memory.py \
+        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'predictions_dst_results.json')}\
+        --output_path_report {os.path.join(output_path, 'report.out')}")
 
         output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
+
+        print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown} // Accuracy: {correct_unknown/(correct_unknown+incorrect_unknown)}')
 
         return output_report
         

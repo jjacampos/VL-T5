@@ -3,7 +3,6 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import os
-import pdb
 import collections
 from pathlib import Path
 from packaging import version
@@ -89,6 +88,9 @@ class TrainerBase(object):
 
         # Config parameters for COMET
         config.use_mem_ids = args.use_mem_ids
+        config.just_text_features = args.just_text_features
+        config.match_text_image = args.match_text_image
+        config.just_text_model = args.just_text_model
 
         return config
 
@@ -172,26 +174,28 @@ class TrainerBase(object):
         return optim, lr_scheduler
 
     def load_checkpoint(self, ckpt_path):
-        prev_state_dict = load_state_dict(ckpt_path, 'cpu')
-
-        # Do not use learned positions for images as we have more now, train them from scratch
-        state_dict = {k: v for k, v in prev_state_dict.items() if 'img_order_embedding' not in k}
-        
-        
+        state_dict = load_state_dict(ckpt_path, 'cpu')
         original_keys = list(state_dict.keys())
         for key in original_keys:
             if key.startswith("vis_encoder."):
                 new_key = 'encoder.' + key[len("vis_encoder."):]
                 state_dict[new_key] = state_dict.pop(key)
-
             if key.startswith("model.vis_encoder."):
                 new_key = 'model.encoder.' + key[len("model.vis_encoder."):]
                 state_dict[new_key] = state_dict.pop(key)
-
+        
+        # Small hack for loading when mismatch of image embeddings shapes
+        if 't5' in self.args.backbone:        
+            state_dict['encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.img_order_embedding.weight'], \
+                self.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
+        else:
+            state_dict['model.encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['model.encoder.visual_embedding.img_order_embedding.weight'], \
+                self.model.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
+        
         results = self.model.load_state_dict(state_dict, strict=False)
         if self.verbose:
             print('Model loaded from ', ckpt_path)
-            print(results)
+            pprint(results)
 
     def init_weights(self):
 

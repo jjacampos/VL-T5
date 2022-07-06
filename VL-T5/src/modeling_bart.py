@@ -1,4 +1,3 @@
-import pdb
 import math
 import random
 from dataclasses import dataclass
@@ -117,8 +116,11 @@ class VisualEmbedding(nn.Module):
                 img_order_ids = img_order_ids.unsqueeze(0)  # .expand(B, -1)
             # HERE IS THE CHANGE FOR ADDING WORD EMBEDDING TO IMAGE
             if self.config.use_mem_ids:
-                img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
-                img_order_embedding = self.obj_order_embedding(img_order_ids)
+                if self.config.match_text_image:
+                    img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
+                    img_order_embedding = self.obj_order_embedding(img_order_ids)
+                else:
+                    img_order_embedding = self.img_order_embedding(img_order_ids)
 
             # if obj_order_ids is None:
             #     obj_order_ids = torch.tensor(self.default_obj_order_ids[:N], dtype=torch.long, device=device)
@@ -131,7 +133,7 @@ class VisualEmbedding(nn.Module):
                 obj_order_ids = obj_order_ids.unsqueeze(0)
             # print('raw obj_order_ids', obj_order_ids)
             # CHANGED THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
-            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 113 -  1
+            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 115 -  1
             # print('re-indexed obj_order_ids', obj_order_ids)
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
             if self.config.use_mem_ids:
@@ -204,33 +206,36 @@ class JointEncoder(BartEncoder):
 
         B, L = inputs_embeds.size()[:-1]
 
-        vis_feats = vis_inputs[0]
-        boxes = vis_inputs[1]
-        img_order_ids = None
-        obj_order_ids = None
-        if len(vis_inputs) >= 3:
-            img_order_ids = vis_inputs[2]
-        if len(vis_inputs) == 4:
-            obj_order_ids = vis_inputs[3]
+        if vis_inputs is None:       
+            vis_embeds = torch.Tensor().to(inputs_embeds.device)
+            vis_attention_mask = torch.Tensor().to(inputs_embeds.device)
+            V_L = 0
+        else:
+            vis_feats = vis_inputs[0]
+            boxes = vis_inputs[1]
+            img_order_ids = None
+            obj_order_ids = None
+            if len(vis_inputs) >= 3:
+                img_order_ids = vis_inputs[2]
+            if len(vis_inputs) == 4:
+                obj_order_ids = vis_inputs[3]
 
-        vis_embeds = self.visual_embedding(vis_feats, boxes, img_order_ids, obj_order_ids)
-        V_L = vis_embeds.size(1)
+            vis_embeds = self.visual_embedding(vis_feats, boxes, img_order_ids, obj_order_ids)
+            V_L = vis_embeds.size(1)
 
         if self.config.share_vis_lang_layer_norm:
             inputs_embeds = torch.cat([inputs_embeds, vis_embeds], dim=1)
-
             inputs_embeds = self.layernorm_embedding(inputs_embeds)
         else:
             inputs_embeds = self.layernorm_embedding(inputs_embeds)
             inputs_embeds = torch.cat([inputs_embeds, vis_embeds], dim=1)
-
 
         hidden_states = F.dropout(inputs_embeds, p=self.dropout, training=self.training)
 
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
 
-        if vis_attention_mask is None:
+        if vis_attention_mask is None and not vis_inputs is None:
             vis_attention_mask = torch.ones(B, V_L, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
 
         # print('attention_mask, ', attention_mask.size())
@@ -242,7 +247,7 @@ class JointEncoder(BartEncoder):
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
             attention_mask = _expand_mask(attention_mask, inputs_embeds.dtype)
-
+        
         # print('ext_attention_mask, ', attention_mask.size())
         # print('attention_mask')
         # print(attention_mask.size())
@@ -376,8 +381,9 @@ class VLBartModel(BartModel):
             B, L = attention_mask.size()
             V_L = encoder_outputs[0].size(1) - L
             vis_attention_mask = attention_mask.new_ones(B, V_L)
-        encoder_attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
 
+        encoder_attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
+        
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,

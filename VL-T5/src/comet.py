@@ -2,7 +2,6 @@ import dist_utils
 from pprint import pformat
 import numpy as np
 from packaging import version
-import pdb
 from comet_data import COMETFineTuneDataset, COMETEvaluator
 import logging
 from tqdm import tqdm
@@ -59,10 +58,9 @@ class Trainer(TrainerBase):
             model_class = VLT5COMET
         elif 'bart' in args.backbone:
             model_class = VLBartCOMET
-
+        
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
-        
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
@@ -74,7 +72,7 @@ class Trainer(TrainerBase):
 
             config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids(
                 [f'<vis_extra_id_{i}>' for i in range(100)])
-
+        
         self.model = self.create_model(model_class, config, **model_kwargs)
 
         if 't5' in self.args.tokenizer:
@@ -89,14 +87,14 @@ class Trainer(TrainerBase):
 
         # Load Checkpoint
         self.start_epoch = None
-        if args.load is not None:
+        if args.load is not None and not args.just_text_model:
             ckpt_path = args.load + '.pth'
             self.load_checkpoint(ckpt_path)
 
         # Add COMET special tokens
         comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
         if 't5' in self.args.tokenizer:
-            comet_special_tokens['additional_special_tokens'] += '<'
+            self.tokenizer.add_tokens('<')
             
         comet_special_tokens['additional_special_tokens'] += [f'mem_id_{i}' for i in range(100-1, -1, -1)]
         comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
@@ -104,7 +102,7 @@ class Trainer(TrainerBase):
         self.model.resize_token_embeddings(len(self.tokenizer))
 
         self.model.tokenizer = self.tokenizer
-
+        
         # GPU Options
         print(f'Model Launching at GPU {self.args.gpu}')
         if self.verbose:
@@ -502,11 +500,12 @@ if __name__ == '__main__':
         from datetime import datetime
         current_time = datetime.now().strftime('%b%d_%H-%M')
 
+        '''
         run_name = f'{current_time}_GPU{args.world_size}'
         if len(comments) > 0:
             run_name += f'_{comment}'
 
         args.run_name = run_name
-
+        '''
     if args.distributed:
         main(args.local_rank, args)
