@@ -383,7 +383,7 @@ def parse_flattened_result(to_parse):
     """
     #dialog_act_regex = re.compile(r'([\w:?.?]*)  *\[([^\]]*)\] *\(([^\]]*)\) *\<([^\]]*)\>')
     dialog_act_regex = re.compile(r'([\w:?.?]*)  *\[(.*)\] *\(([^\]]*)\) *\<([^\]]*)\>')
-    slot_regex = re.compile(r'([A-Za-z0-9_.-:]*)  *= ([^,]*)')
+    slot_regex = re.compile(r"([A-Za-z0-9_.-:]*)  *= (\[(.*)\]|[^,]*)")
     request_regex = re.compile(r'([A-Za-z0-9_.-:]+)')
     object_regex = re.compile(r'([A-Za-z0-9]+)')
 

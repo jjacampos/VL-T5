@@ -216,7 +216,6 @@ class COMETEvaluator:
     def evaluate(self, predicts, examples, test_file, output_path):
 
         test_file = test_file.replace('_gpt2', '')
-        test_file = test_file.replace('_just_mm', '')
         correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes
         for i in range(len(predicts)):

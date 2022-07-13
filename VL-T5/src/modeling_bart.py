@@ -63,9 +63,9 @@ class VisualEmbedding(nn.Module):
 
             if self.config.use_vis_order_embedding:
                 self.obj_order_embedding = obj_order_embedding
-                # self.img_order_embedding = nn.Embedding(n_images, config.d_model)
+                self.img_order_embedding = nn.Embedding(n_images, config.d_model)
 
-                # self.default_obj_order_ids = self.config.default_obj_order_ids
+                self.default_obj_order_ids = self.config.default_obj_order_ids
 
             if self.config.use_vis_layer_norm:
                 self.layer_norm = nn.LayerNorm(config.d_model)

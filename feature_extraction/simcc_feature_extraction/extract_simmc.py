@@ -51,7 +51,8 @@ def main(args):
 if __name__ == '__main__':
 
     parser = ArgumentParser()
-    parser.add_argument('--input_path')
+    parser.add_argument('--imgs_input_path')
+    parser.add_argument('--scene_graphs_input_path')
     parser.add_argument('--output_path')
 
     args = parser.parse_args()
