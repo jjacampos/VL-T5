@@ -1,3 +1,6 @@
+from asyncio.constants import LOG_THRESHOLD_FOR_CONNLOST_WRITES
+from email.policy import default
+from cv2 import filterHomographyDecompByVisibleRefpoints
 from torch.utils.data import DataLoader, Dataset, Sampler
 from pathlib import Path
 from collections import defaultdict
@@ -44,11 +47,13 @@ def make_uid(img_id, dset, sent_idx):
 
 
 def get_datum(datum):
+
     data = []
     _sents = []
 
     args = datum['args']
-
+    # Control that we just add the elem once for image captioning and image grounding
+    added = False
     if datum['is_train']:
         if 'COCO_train2014' in datum['img_id']:
             img_source = 'mscoco_resplit_train_train2014'
@@ -68,11 +73,38 @@ def get_datum(datum):
             if text_source != 'mscoco':
                 continue
 
+        img_id = datum['img_id']
         labels = None
         if datum['qa'] and text_source in datum['labelf']:
             labels = datum['labelf'][text_source]
+        else:
+            if not added:
+                if datum['ci']:
+                    for i in range(args.ground_upsample):
+                        new_datum = {
+                            'uid': make_uid(img_id, 'ci', i),
+                            'img_id': img_id,
+                            'img_source': img_source,
+                            'task': 'ci',
+                            'text_source': text_source,
+                            'sent': random.choice(sents),
+                            'label': None,
+                        }
+                        data.append(new_datum)
+                if datum['ig']:
+                    for i in range(args.ground_upsample):
+                        new_datum = {
+                            'uid': make_uid(img_id, 'ig', i),
+                            'img_id': img_id,
+                            'img_source': img_source,
+                            'task': 'ig',
+                            'text_source': text_source,
+                            'sent': random.choice(sents),
+                            'label': None,
+                        }
+                        data.append(new_datum)
+                    added = True
 
-        img_id = datum['img_id']
 
         for sent_idx, sent in enumerate(sents):
 
@@ -126,59 +158,78 @@ def get_datum(datum):
                         new_datum['label'] = None
                         data.append(new_datum)
 
-            # Task: Image-text matching
-            if args.itm_cocoonly:
-                caption_sources = ['mscoco']
-            else:
-                caption_sources = ['mscoco', 'vg']
-            if datum['itm'] and text_source in caption_sources:
-                new_datum = deepcopy(new_datum)
-                new_datum['task'] = 'itm'
-                new_datum['label'] = None
-                data.append(new_datum)
-
             _sents.append(sent)
 
-    if datum['ground_caption']:
+    if datum['cr']:
         for i in range(args.ground_upsample):
             new_datum = {
-                'uid': make_uid(img_id, 'ground_caption', i),
+                'uid': make_uid(img_id, 'cr', i),
                 'img_id': img_id,
                 'img_source': img_source,
-                'task': 'ground_caption',
-                'text_source': 'ground_caption',
+                'task': 'cr',
+                'text_source': 'cr',
                 'sent': None,
                 'label': None,
             }
             data.append(new_datum)
-    if datum['refer']:
+
+
+    if datum['og']:
         for i in range(args.ground_upsample):
             new_datum = {
-                'uid': make_uid(img_id, 'refer', i),
+                'uid': make_uid(img_id, 'og', i),
                 'img_id': img_id,
                 'img_source': img_source,
-                'task': 'refer',
-                'text_source': 'refer',
+                'task': 'og',
+                'text_source': 'og',
                 'sent': None,
                 'label': None,
             }
             data.append(new_datum)
+
+
 
     # for d in data:
     #     assert 'task' in d
 
     return data
 
+# Added for the extension to multi image
+def extend_for_multi_image(args, data, task_to_examples):
+    ## New code goes here, we get more examples for the context.
+    multi_image_data = []
+    for index, datum in tqdm(enumerate(data), total=len(data)):
+        #   context_indexes = random.sample([elem for elem in task_to_examples[datum['task']] if elem != index], n_context_images)
+        n_context_images = random.randint(1, args.max_context)
+        context_indexes = random.sample(task_to_examples[datum['task']], n_context_images)
+        # It can happen (expect to be very few times) that we sample the actual index, put it last in this case. 
+        if index not in context_indexes:
+            context_indexes.append(index)
+        else:
+            context_indexes.remove(index)
+            context_indexes.append(index)
+
+        multi_image_data.append({'uid': datum['uid'],
+                                'img_id': [data[h_index]['img_id'] for h_index in context_indexes],
+                                'img_source': [data[h_index]['img_source'] for h_index in context_indexes],
+                                'sent': [data[h_index]['sent'] for h_index in context_indexes],
+                                'text_source': [data[h_index]['text_source'] for h_index in context_indexes],
+                                'task': datum['task'],
+                                'label': [data[h_index]['label'] for h_index in context_indexes]})
+    
+    return multi_image_data
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, split='vg', rank=-1, topk=-1, verbose=True, args=None, is_train=True):
+    def __init__(self, split='vg', rank=-1, topk=-1, verbose=True, args=None, is_train=True, random_indexes=True, random_order_appearance=True):
 
         self.topk = topk
         self.verbose = verbose
         self.args = args
 
         self.max_context = args.max_context
+        self.random_indexes = random_indexes
+        self.random_order_appearance = random_order_appearance
 
         # Loading datasets to data
         self.sources = split.split(',')
@@ -193,7 +244,7 @@ class PretrainDataset(Dataset):
         self.img_ids_to_source = {}
 
         losses = args.losses.split(',')
-
+        print(losses)
         data = []
         for img_source in self.sources:
             data_info_path = dataset_dir.joinpath(f'lxmert/{img_source}.json')
@@ -211,14 +262,18 @@ class PretrainDataset(Dataset):
 
                     datum['lm'] = 'lm' in losses
                     datum['qa'] = 'qa' in losses
-                    datum['ground_caption'] = 'ground_caption' in losses
-                    datum['refer'] = 'refer' in losses
-                    datum['itm'] = 'itm' in losses
+                    datum['ig'] = 'ig' in losses
+                    datum['og'] = 'og' in losses
+                    datum['cr'] = 'cr' in losses
+                    datum['ci'] = 'ci' in losses
+
                     datum['caption'] = 'caption' in losses
+
 
                     datum['backbone'] = self.args.backbone
 
                 data.extend(_data)
+
 
         # Modify the answers
         if 'qa' in args.losses:
@@ -234,6 +289,7 @@ class PretrainDataset(Dataset):
                             else:
                                 label.pop(ans)
 
+
         if self.verbose:
             print("# images:", len(data))
 
@@ -248,10 +304,11 @@ class PretrainDataset(Dataset):
         with Pool(8) as pool:
             if self.verbose:
                 data = [datum for _data in tqdm(
-                    pool.imap(get_datum, data), total=len(data), ncols=100, desc="Creating pretrainig data examples") for datum in _data]
+                    pool.imap(get_datum, data), total=len(data), ncols=100, desc="Creating pretraining data examples") for datum in _data]
             else:
                 data = [datum for _data in pool.imap(
                     get_datum, data) for datum in _data]
+
 
         if self.args.itm_cocoonly:
             caption_sources = ['mscoco']
@@ -259,86 +316,115 @@ class PretrainDataset(Dataset):
             caption_sources = ['mscoco', 'vg']
         self.data_captions = [datum for datum in data if datum['text_source'] in caption_sources]
         self.n_data_captions = len(self.data_captions)
+        self.task_to_examples = defaultdict(list)
+
+        from collections import Counter
+        task_counter = Counter()
+        for index, datum in enumerate(data):
+            try:
+                task_counter.update([datum['task']])
+                self.task_to_examples[datum['task']].append(index)
+            except KeyError:
+                print(datum)
+                exit()
+        if self.verbose:                
+            print(task_counter)
+        for k, v in task_counter.items():
+            print(k, f'{v/len(data)*100:.1f}%')
 
         if self.verbose:
             print('# itm data:', self.n_data_captions)
 
+        
+        # Added for the extension to multi image, we do it here for minimal editing of original code
+        data =  extend_for_multi_image(args, data, self.task_to_examples)
+
         self.data = data
         self.n_data = len(self.data)
 
-        if self.verbose and is_train:
-            from collections import Counter
-            task_counter = Counter()
-            for datum in data:
-                try:
-                    task_counter.update([datum['task']])
-                except KeyError:
-                    print(datum)
-                    exit()
 
-            print(task_counter)
-            for k, v in task_counter.items():
-                print(k, f'{v/len(data)*100:.1f}%')
 
         if self.verbose:
             print("# examples:", len(data))
 
         self.source_to_h5 = {
-            'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath('train2014_obj36.h5'),
-            'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath('val2014_obj36.h5'),
-            'mscoco_resplit_val': coco_dir.joinpath('features').joinpath('resplit_val_obj36.h5'),
-            'vgnococo': vg_dir.joinpath('features').joinpath('vg_gqa_obj36.h5'),
+            'mscoco_resplit_train_train2014': h5py.File(coco_dir.joinpath('features').joinpath('train2014_obj36.h5')),
+            'mscoco_resplit_train_val2014': h5py.File(coco_dir.joinpath('features').joinpath('val2014_obj36.h5')),
+            'mscoco_resplit_val': h5py.File(coco_dir.joinpath('features').joinpath('resplit_val_obj36.h5')),
+            'vgnococo': h5py.File(vg_dir.joinpath('features').joinpath('vg_gqa_obj36.h5')),
 
         }
 
         self.n_boxes = args.n_boxes
 
         if 't5' in self.args.backbone:
-            if self.args.use_vision:
-                # self.tokenizer = VLT5Tokenizer.from_pretrained(
-                #     args.backbone, do_lower_case=args.do_lower_case)
-                self.tokenizer = VLT5TokenizerFast.from_pretrained(
-                    args.backbone, do_lower_case=args.do_lower_case)
-            else:
-                # self.tokenizer = T5Tokenizer.from_pretrained(
-                #     args.backbone, do_lower_case=args.do_lower_case)
-                self.tokenizer = T5TokenizerFast.from_pretrained(
-                    args.backbone, do_lower_case=args.do_lower_case)
+                self.tokenizer = T5Tokenizer.from_pretrained(
+                    args.backbone)
         elif 'bart' in self.args.backbone:
             self.tokenizer = BartTokenizer.from_pretrained(args.backbone)
-            additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)]
-            special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
-            self.tokenizer.add_special_tokens(special_tokens_dict)
 
+        additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1)]
+        special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
+        self.tokenizer.add_special_tokens(special_tokens_dict)
 
 
     def __len__(self):
         # return len(self.data)
         return self.n_data
 
-    def __getitem__(self, idx):
+    def _generate_text_(self, sents, img_ids):
+        out_sentence = ""
+        for i, sent in enumerate(sents):
+            out_sentence += f'<img_extra_id_{img_ids[i]}> {sent} '
+        return out_sentence.strip()
 
+    def _generate_text_qa_(self, sents, answers, img_ids):
+        out_sentence = ""
+        for i, (sent, answer) in enumerate(zip(sents, answers)):
+            out_sentence += f'<img_extra_id_{img_ids[i]}> {sent} {answer} '
+        out_sentence += f'<img_extra_id_{img_ids[-1]}> {sents[-1]}'
+        return out_sentence
+
+    def _generate_img_ids_(self, n):
+        img_ids = [i for i in range(self.args.max_context + 1)]
+        if self.random_indexes:
+            random.shuffle(img_ids)
+
+        return img_ids[:n]
+
+    def _generate_obj_ids_(self, img_ids):
+        obj_ids = []
+        for img_id in img_ids:
+            for i in range(self.args.n_boxes):
+                obj_ids.append(img_id * self.args.n_boxes + i)
+        return obj_ids
+
+
+    def __getitem__(self, idx):
         out_dict = {}
         out_dict['args'] = self.args
-
-        ## New code goes here, we get more examples for the context.
-        n_context_images = random.randint(1, self.max_context)
-        
         
         datum = self.data[idx]
         uid = datum['uid']
         out_dict['uid'] = uid
 
         ###### Image ######
-        img_id = datum['img_id']
-        source = datum['img_source']
+        img_ids = datum['img_id']
+        sources = datum['img_source']
 
-        f = self.source_to_h5[source]
-        if isinstance(f, Path):
-            path = self.source_to_h5[source]
-            f = h5py.File(path, 'r')
-            self.source_to_h5[source] = f
+        '''
+        fs = { f: self.source_to_h5[f] for f in sources}
+        
+        for f in fs:
+            if isinstance(f, Path):
+                path = self.source_to_h5[source]
+                f = h5py.File(path, 'r')
+                self.source_to_h5[source] = f
+        '''
+
+        # TODO! If we want to use oscar tags code has to be updated 
 
         if 't5' in self.args.backbone:
 
@@ -349,99 +435,137 @@ class PretrainDataset(Dataset):
 
             # T5 Corrupt span
             if task == 'lm':
-                assert text_source in ["mscoco", 'vg']
+                assert text_source[-1] in ["mscoco", 'vg']
 
                 prefix = "span prediction:"
-                sent = datum['sent']
-                source_text, target_text = preprocess.corrupt_spans(
-                    sent, mask_ratio=self.args.word_mask_rate, prefix=prefix)
+                sents = datum['sent']
+                min_index = 0
+                source_texts = []
+                target_texts = []
+                for sent in sents:
+                    source_text, target_text, min_index = preprocess.corrupt_spans(
+                        sent, mask_ratio=self.args.word_mask_rate, prefix=prefix, min_index = min_index)
 
-                if self.args.oscar_tags:
-                    input_tokens = [source_text]
-                    input_tokens.append('tags:')
-                    obj_ids = f[f'{img_id}/obj_id'][()]
-                    for obj_id in obj_ids:
-                        obj = vg_classes[obj_id]
-                        if obj not in input_tokens:
-                            input_tokens.append(obj)
-                    source_text = ' '.join(input_tokens)
+                    if self.args.oscar_tags:
+                        input_tokens = [source_text]
+                        input_tokens.append('tags:')
+                        obj_ids = f[f'{img_id}/obj_id'][()]
+                        for obj_id in obj_ids:
+                            obj = vg_classes[obj_id]
+                            if obj not in input_tokens:
+                                input_tokens.append(obj)
+                        source_text = ' '.join(input_tokens)
+
+                    source_texts.append(source_text)
+                    target_texts.append(target_text)
+
+                img_indexes = self._generate_img_ids_(len(img_ids))
+                obj_indexes = self._generate_obj_ids_(img_indexes)
+                source_text = self._generate_text_(source_texts, img_indexes)
+                target_text = ' '.join(target_texts)
 
             elif task == 'qa':
-                assert text_source in ['vqa', 'gqa', 'visual7w'], (text_source, uid)
+                assert text_source[-1] in ['vqa', 'gqa', 'visual7w'], (text_source, uid)
 
-                label = datum['label']
-                assert len(label) > 0
+                labels = datum['label']
+                answers = []
+                for label in labels:
+                    assert len(label) > 0
 
-                keys, values = zip(*label.items())
-                # single answer
-                if len(keys) == 1:
-                    ans = keys[0]
-                # multiple answers -> sample one answer
-                else:
-                    value_sum = sum(values)
-                    prob = [value / value_sum for value in values]
-                    choice = np.random.multinomial(1, prob).argmax()
-                    ans = keys[choice]
+                    keys, values = zip(*label.items())
+                    ans = ''
+                    # single answer
+                    if len(keys) == 1:
+                        ans = keys[0]
+                    # multiple answers -> sample one answer
+                    else:
+                        value_sum = sum(values)
+                        prob = [value / value_sum for value in values]
+                        choice = np.random.multinomial(1, prob).argmax()
+                        ans = keys[choice]
+                    answers.append(ans)
 
-                sent = datum['sent']
+                sents = datum['sent']
+                source_texts = []
+                for i, sent in enumerate(sents):
+                    if self.args.oscar_tags:
+                        input_tokens = [source_text]
+                        input_tokens.append('tags:')
+                        obj_ids = self.source_to_h5[sources[i]][f'{img_ids[i]}/obj_id'][()]
+                        for obj_id in obj_ids:
+                            obj = vg_classes[obj_id]
+                            if obj not in input_tokens:
+                                input_tokens.append(obj)
+                        sent = sent + ' ' + ' '.join(input_tokens)
+                    source_texts.append(sent)
+                img_indexes = self._generate_img_ids_(len(img_ids))
+                obj_indexes = self._generate_obj_ids_(img_indexes)
+                source_text = self._generate_text_qa_(source_texts, answers[:-1], img_indexes)
 
                 if self.args.single_vqa_prefix:
-                    source_text = f"vqa: {sent}"
+                    source_text = f"vqa: {source_text}"
                 else:
-                    source_text = f"{text_source}: {sent}"
-                if self.args.oscar_tags:
-                    input_tokens = [source_text]
-                    input_tokens.append('tags:')
-                    obj_ids = f[f'{img_id}/obj_id'][()]
-                    for obj_id in obj_ids:
-                        obj = vg_classes[obj_id]
-                        if obj not in input_tokens:
-                            input_tokens.append(obj)
-                    source_text = ' '.join(input_tokens)
-                target_text = ans
+                    source_text = f"{text_source[-1]}: {source_text}"
 
-            elif task == 'itm':
+                target_text = answers[-1]
 
-                assert text_source in ["mscoco", 'vg']
-                is_matched = 1
-                sent = datum['sent']
-                if random.random() < 0.5:
-                    is_matched = 0
-
-                    rand_idx = random.randint(0, self.n_data_captions-1)
-                    # rand_idx = int(self.n_data_captions * random.random())
-
-                    other_datum = self.data_captions[rand_idx]
-                    # other_datum = self.data[random.randint(0, len(self.data)-1)]
-                    while other_datum['img_id'] == img_id:
-
-                        rand_idx = random.randint(0, self.n_data_captions-1)
-                        # rand_idx = int(self.n_data_captions * random.random())
-
-                        other_datum = self.data_captions[rand_idx]
-                        # other_datum = self.data[random.randint(0, len(self.data)-1)]
-                    sent = other_datum['sent']
-
-                prefix = "image text match:"
+            elif task == 'ig':
+                assert text_source[-1] in ["mscoco", 'vg']
+                sent = datum['sent'][-1]
+                
+                prefix = "image grounding:"
                 source_text = f"{prefix} {sent}"
 
                 if self.args.oscar_tags:
                     input_tokens = [source_text]
                     input_tokens.append('tags:')
-                    obj_ids = f[f'{img_id}/obj_id'][()]
+                    obj_ids = self.source_to_h5[sources[0]][f'{img_ids[0]}/obj_id'][()]
                     for obj_id in obj_ids:
                         obj = vg_classes[obj_id]
                         if obj not in input_tokens:
                             input_tokens.append(obj)
                     source_text = ' '.join(input_tokens)
-                if is_matched:
-                    target_text = 'true'
-                else:
-                    target_text = 'false'
 
-            if task == 'ground_caption':
-                obj_ids = f[f'{img_id}/obj_id'][()]
-                attr_ids = f[f'{img_id}/attr_id'][()]
+                # Target is always the last image
+                img_indexes = self._generate_img_ids_(len(img_ids))                
+                obj_indexes = self._generate_obj_ids_(img_indexes)
+                                                
+
+                target_text = f'<img_extra_id_{img_indexes[-1]}>' 
+           
+
+            if task == 'og':
+                obj_ids = []
+                attr_ids = [] 
+                # We want to predict an object from the last image always. 
+                obj_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/obj_id'][()].tolist()
+                attr_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/attr_id'][()].tolist()
+
+                captions = []
+                for obj_id, attr_id in zip(obj_ids, attr_ids):
+                    obj = vg_classes[obj_id]
+                    attr = vg_attrs[attr_id]
+
+                    caption = f'{attr} {obj}'
+                    captions.append(caption)
+
+                prefix = "object grounding:"
+
+                img_indexes = self._generate_img_ids_(len(img_ids)) 
+                obj_indexes = self._generate_obj_ids_(img_indexes)
+                source_text, target_text = preprocess.refer_expression(
+                    captions, obj_indexes[:self.args.n_boxes], self.args.n_ground, prefix=prefix, sort=False)
+
+                sent = source_text
+
+                loss_weight = self.args.ground_weight
+
+            if task == 'cr':
+                obj_ids = []
+                attr_ids = [] 
+                # We want to predict an object from the last image always. 
+                obj_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/obj_id'][()].tolist()
+                attr_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/attr_id'][()].tolist()
 
                 captions = []
                 for obj_id, attr_id in zip(obj_ids, attr_ids):
@@ -453,33 +577,34 @@ class PretrainDataset(Dataset):
 
                 # prefix = "describe visual inputs:"
                 prefix = "caption region:"
+                img_indexes = self._generate_img_ids_(len(img_ids)) 
+                obj_indexes = self._generate_obj_ids_(img_indexes)
                 source_text, target_text = preprocess.ground_caption(
-                    captions, self.args.n_ground, prefix=prefix, sort=False)
+                    captions, obj_indexes[:self.args.n_boxes], self.args.n_ground, prefix=prefix, sort=False)
 
                 sent = source_text
-
                 loss_weight = self.args.ground_weight
+                
+            if task == 'ci':
+                assert text_source[-1] in ["mscoco", 'vg']
+                sent = datum['sent'][-1]
+                # Target is always the first image
+                img_indexes = self._generate_img_ids_(len(img_ids))  
+                obj_indexes = self._generate_obj_ids_(img_indexes)
+                prefix = "caption image:"
+                source_text = f"{prefix} <img_extra_id_{img_indexes[-1]}>"
+                target_text = sent
 
-            if task == 'refer':
-                obj_ids = f[f'{img_id}/obj_id'][()]
-                attr_ids = f[f'{img_id}/attr_id'][()]
-
-                captions = []
-                for obj_id, attr_id in zip(obj_ids, attr_ids):
-                    obj = vg_classes[obj_id]
-                    attr = vg_attrs[attr_id]
-
-                    caption = f'{attr} {obj}'
-                    captions.append(caption)
-
-                # prefix = "refer expressions:"
-                prefix = "visual grounding:"
-                source_text, target_text = preprocess.refer_expression(
-                    captions, self.args.n_ground, prefix=prefix, sort=False)
-
-                sent = source_text
-
-                loss_weight = self.args.ground_weight
+            '''
+            # Random order for image features, we want to actually learn a mapping
+            This is not required because image features do not have positions. The order of the features does not matter. 
+            if self.random_order_appearance:
+                random_indexes = [i for i in range(len(img_ids))]
+                random.shuffle(random_indexes)
+                img_ids = [img_ids[i] for i in random_indexes]                
+                sources = [sources[i] for i in random_indexes]
+                img_indexes = [img_indexes[i] for i in random_indexes]     
+            '''
 
             input_ids = self.tokenizer.encode(
                 source_text, padding=True, truncation=True, max_length=self.args.max_text_length)
@@ -502,31 +627,46 @@ class PretrainDataset(Dataset):
 
             out_dict['loss_weight'] = loss_weight
 
-            feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
+
+            feats = np.zeros(shape=(len(img_ids), self.n_boxes, 2048), dtype=np.float32)
+            boxes_list = []
             try:
-                f[f'{img_id}/features'].read_direct(feats)
+                for i, img_id in enumerate(img_ids):
+                    # Get the top n_boxes taking prob into account
+                    indexes = (-self.source_to_h5[sources[i]][f'{img_id}/attr_conf'][()]).argsort()[:self.n_boxes]
+                    feats[i] = self.source_to_h5[sources[i]][f'{img_id}/features'][()][indexes]
+                    # Normalize the boxes (to 0 ~ 1)
+                    img_h = self.source_to_h5[sources[i]][f'{img_id}/img_h'][()]
+                    img_w = self.source_to_h5[sources[i]][f'{img_id}/img_w'][()]
+                    boxes = self.source_to_h5[sources[i]][f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
+                    boxes[:, (0, 2)] /= img_w
+                    boxes[:, (1, 3)] /= img_h
+                    np.testing.assert_array_less(boxes, 1+1e-5)
+                    # np.testing.assert_array_less(boxes, 1+5e-2)
+                    np.testing.assert_array_less(-boxes, 0+1e-5)
+                    boxes = torch.from_numpy(boxes)
+                    boxes.clamp_(min=0.0, max=1.0)
+                    boxes_list.append(boxes)
             except KeyError:
                 print(uid)
-                print(source)
+                print(sources)
                 print(img_id)
                 exit()
 
             feats = torch.from_numpy(feats)
             out_dict['vis_feats'] = feats
 
-            # Normalize the boxes (to 0 ~ 1)
-            img_h = f[f'{img_id}/img_h'][()]
-            img_w = f[f'{img_id}/img_w'][()]
-            boxes = f[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
-            boxes[:, (0, 2)] /= img_w
-            boxes[:, (1, 3)] /= img_h
-            np.testing.assert_array_less(boxes, 1+1e-5)
-            # np.testing.assert_array_less(boxes, 1+5e-2)
-            np.testing.assert_array_less(-boxes, 0+1e-5)
-            boxes = torch.from_numpy(boxes)
-            boxes.clamp_(min=0.0, max=1.0)
-            out_dict['boxes'] = boxes
+            img_indexes = self.tokenizer.encode([f'<img_extra_id_{index}>' for index in img_indexes], add_special_tokens = False)
+            obj_indexes = self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in obj_indexes], add_special_tokens = False)
 
+            out_dict['context_imgs_length'] = len(img_indexes)
+            boxes = np.stack(boxes_list)
+            boxes = torch.from_numpy(boxes)
+            
+            out_dict['boxes'] = boxes
+            out_dict['img_indexes'] = img_indexes
+            out_dict['obj_indexes'] = obj_indexes
+            
             return out_dict
 
         elif 'bart' in self.args.backbone:
@@ -682,6 +822,7 @@ class PretrainDataset(Dataset):
             target_ids = self.tokenizer.encode(
                 target_text, padding=True, truncation=True, max_length=self.args.gen_max_length)
 
+            
             # if task in ['refer', 'itm']:
             #     target_ids = target_ids[:-1]
 
@@ -689,6 +830,8 @@ class PretrainDataset(Dataset):
             out_dict['input_length'] = len(input_ids)
             out_dict['target_ids'] = torch.LongTensor(target_ids)
             out_dict['target_length'] = len(target_ids)
+
+            out_dict['context_imgs_length'] = len(img_ids)
 
             out_dict['source_text'] = source_text
             out_dict['target_text'] = target_text
@@ -703,7 +846,7 @@ class PretrainDataset(Dataset):
                 f[f'{img_id}/features'].read_direct(feats)
             except KeyError:
                 print(uid)
-                print(source)
+                print(sources)
                 print(img_id)
                 exit()
 
@@ -728,23 +871,26 @@ class PretrainDataset(Dataset):
 
     def collate_fn(self, batch):
         batch_entry = {}
-
         B = len(batch)
 
         args = self.args
 
-        V_L = len(batch[0]['boxes'])
-
+        _, n_boxes, feat_dim = batch[0]['vis_feats'].shape
+        
         S_W_L = max(entry['input_length'] for entry in batch)
         T_W_L = max(entry['target_length'] for entry in batch)
 
-        feat_dim = batch[0]['vis_feats'].shape[-1]
+        max_context_images = max(entry['context_imgs_length'] for entry in batch)
 
         input_ids = torch.ones(B, S_W_L, dtype=torch.long) * self.tokenizer.pad_token_id
         target_ids = torch.ones(B, T_W_L, dtype=torch.long) * self.tokenizer.pad_token_id
 
-        boxes = torch.zeros(B, V_L, 4, dtype=torch.float)
-        vis_feats = torch.zeros(B, V_L, feat_dim, dtype=torch.float)
+        boxes = torch.zeros(B, max_context_images, n_boxes, 4, dtype=torch.float)
+        vis_feats = torch.zeros(B, max_context_images, n_boxes, feat_dim, dtype=torch.float)
+
+        img_indexes = torch.zeros((B, max_context_images * n_boxes), dtype=torch.long)
+        obj_indexes = torch.zeros((B, max_context_images * n_boxes), dtype=torch.long)
+        vis_attention = torch.zeros((B, max_context_images * n_boxes), dtype=torch.float)
 
         loss_weights = torch.ones(B, dtype=torch.float)
 
@@ -760,8 +906,8 @@ class PretrainDataset(Dataset):
             input_ids[i, :entry['input_length']] = entry['input_ids']
             target_ids[i, :entry['target_length']] = entry['target_ids']
 
-            boxes[i] += entry['boxes']
-            vis_feats[i] += entry['vis_feats']
+            boxes[i,:entry['context_imgs_length']] += entry['boxes']
+            vis_feats[i,:entry['context_imgs_length']] += entry['vis_feats']
 
             if 'ans' in entry:
                 ans.append(entry['ans'])
@@ -772,6 +918,10 @@ class PretrainDataset(Dataset):
             sentences.append(entry['sent'])
             uids.append(entry['uid'])
 
+            img_indexes[i, :entry['context_imgs_length'] * n_boxes] += torch.LongTensor(np.repeat(entry['img_indexes'], n_boxes))
+            obj_indexes[i, :entry['context_imgs_length'] * n_boxes] += torch.LongTensor(entry['obj_indexes'])
+            vis_attention[i, :entry['context_imgs_length'] * n_boxes] += torch.ones((entry['context_imgs_length'] * n_boxes))
+
             if 'source_text' in entry:
                 source_text.append(entry['source_text'])
             if 'target_text' in entry:
@@ -779,6 +929,7 @@ class PretrainDataset(Dataset):
 
             if 'loss_weight' in entry:
                 loss_weights[i] = entry['loss_weight']
+
 
         assert 't5' in args.backbone or 'bart' in args.backbone
         word_mask = target_ids != self.tokenizer.pad_token_id
@@ -798,6 +949,10 @@ class PretrainDataset(Dataset):
 
         batch_entry['uid'] = uids
         batch_entry['sent'] = sentences
+
+        batch_entry['img_indexes'] = img_indexes
+        batch_entry['obj_indexes'] = obj_indexes
+        batch_entry['vis_attention'] = vis_attention
 
         return batch_entry
 
@@ -822,6 +977,7 @@ def get_loader(args, split='vgnococo', mode='train',
     else:
         sampler = None
 
+    
     if mode == 'train':
         loader = DataLoader(
             dataset, batch_size=batch_size, shuffle=(sampler is None),

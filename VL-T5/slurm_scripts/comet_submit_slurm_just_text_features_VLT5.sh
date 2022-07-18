@@ -14,7 +14,7 @@
 #SBATCH --error=/fsx/jacampos/experiments/vl-seq2seq/exploration/no_mem_ids_exploration_%A_%a.err
 
 ## partition name
-#SBATCH --partition=a100
+#SBATCH --partition=hipri
 
 ## number of gpus
 #SBATCH --gpus-per-node=1
@@ -74,6 +74,7 @@ python -m torch.distributed.launch \
         --batch_size 32 \
         --valid_batch_size 32 \
 	--n_boxes 10 \
+	--individual_vis_layer_norm false \
         --output $base_path${paths[$SLURM_ARRAY_TASK_ID-1]} \
         ${hyperparams[$SLURM_ARRAY_TASK_ID-1]}
        

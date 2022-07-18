@@ -14,7 +14,7 @@
 #SBATCH --error=/fsx/jacampos/experiments/vl-seq2seq/exploration/no_mem_ids_exploration_%A_%a.err
 
 ## partition name
-#SBATCH --partition=a100
+#SBATCH --partition=hipri
 
 ## number of gpus
 #SBATCH --gpus-per-node=1
@@ -49,18 +49,18 @@ paths=("vlbart/text_image_features/no_mem_ids/global" \
 "bart/text_image_features/no_img_text_matching/normal" \
 "bart/text_image_features/img_text_matching/global" \
 "bart/text_image_features/img_text_matching/normal")
-hyperparams=("--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --run_name vlt5_mm_no_mem_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --run_name vlt5_mm_no_mem_normal" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --use_mem_ids --run_name vlt5_mm_no_matching_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --use_mem_ids --run_name vlt5_mm_no_matching_normal" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --use_mem_ids --match_text_image --run_name vlt5_mm_matching_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --use_mem_ids --match_text_image --run_name vlt5_mm_matching_normal" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --run_name t5_mm_no_mem_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --run_name t5_mm_no_mem_normal" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --use_mem_ids --run_name t5_mm_no_matching_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --use_mem_ids --run_name t5_mm_no_matching_normal" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --use_mem_ids --match_text_image --run_name t5_mm_matching_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --use_mem_ids --match_text_image --run_name t5_mm_matching_normal")
+hyperparams=("--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --run_name vlbart_mm_no_mem_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --run_name vlbart_mm_no_mem_normal" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --use_mem_ids --run_name vlbart_mm_no_matching_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --use_mem_ids --run_name vlbart_mm_no_matching_normal" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization random_global --use_mem_ids --match_text_image --run_name vlbart_mm_matching_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --randomization no_random --use_mem_ids --match_text_image --run_name vlbart_mm_matching_normal" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --run_name bart_mm_no_mem_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --run_name bart_mm_no_mem_normal" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --use_mem_ids --run_name bart_mm_no_matching_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --use_mem_ids --run_name bart_mm_no_matching_normal" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization random_global --use_mem_ids --match_text_image --run_name bart_mm_matching_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLBart/Epoch30 --just_text_model --randomization no_random --use_mem_ids --match_text_image --run_name bart_mm_matching_normal")
 master_port=(11111 22222 33333 44444 55555 17171 14141 19191 16161 10101 12121 13131)
 echo $SLURM_ARRAY_TASK_ID
 echo ${paths[$SLURM_ARRAY_TASK_ID-1]}
@@ -94,6 +94,7 @@ python -m torch.distributed.launch \
         --batch_size 32 \
         --valid_batch_size 32 \
 	--n_boxes 10 \
+        --individual_vis_layer_norm false \
         --output $base_path${paths[$SLURM_ARRAY_TASK_ID-1]} \
         ${hyperparams[$SLURM_ARRAY_TASK_ID-1]}
        

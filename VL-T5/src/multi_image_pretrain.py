@@ -7,6 +7,7 @@ import shutil
 from packaging import version
 
 
+
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -53,23 +54,22 @@ class Trainer(TrainerBase):
             model_class = VLT5Pretraining
         elif 'bart' in args.backbone:
             model_class = VLBartPretraining
-
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
-        if 'bart' in self.args.tokenizer:
-            num_added_toks = 0
-            if config.use_vis_order_embedding:
-                additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                        [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)]
-                special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
-                num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
+        num_added_toks = 0
+        if config.use_vis_order_embedding:
+            additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                    [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1) ] + \
+                    [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1) ]
+            special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
+            num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
 
-                config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids([f'<vis_extra_id_{i}>' for i in range(100)])
+            config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids([f'<vis_extra_id_{i}>' for i in range(100)])
 
         self.model = self.create_model(model_class, config, **model_kwargs)
 
         if 't5' in self.args.tokenizer:
-            self.model.resize_token_embeddings(self.tokenizer.vocab_size)
+            self.model.resize_token_embeddings(self.model.shared.num_embeddings + num_added_toks)
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(self.model.model.shared.num_embeddings + num_added_toks)
 
@@ -91,7 +91,7 @@ class Trainer(TrainerBase):
             from time import time
             start = time()
         self.model = self.model.to(args.gpu)
-
+        
         # Optimizer
         if train:
             self.optim, self.lr_scheduler = self.create_optimizer_and_scheduler()
@@ -112,7 +112,6 @@ class Trainer(TrainerBase):
 
     def train(self):
         LOSSES_NAME = self.args.LOSSES_NAME
-
         if self.args.dry:
             results = self.evaluate_epoch(epoch=0)
 
@@ -394,6 +393,7 @@ def main_worker(gpu, args):
     # GPU is assigned
     args.gpu = gpu
     args.rank = gpu
+    
     print(f'Process Launching at GPU {gpu}')
 
     if args.distributed:

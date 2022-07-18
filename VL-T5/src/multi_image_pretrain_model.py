@@ -12,19 +12,21 @@ class VLT5Pretraining(VLT5):
         self.losses = self.config.losses.split(',')
 
     def train_step(self, batch):
-
         device = next(self.parameters()).device
-        vis_feats = batch['vis_feats'].to(device)
-        input_ids = batch['input_ids'].to(device)
-        vis_pos = batch['boxes'].to(device)
-
+        input_ids = batch['input_ids'].to(device)        
+        B, n_context_images, n_boxes, feat_dim = batch['vis_feats'].shape
+        vis_feats = batch['vis_feats'].to(device).view(B, n_context_images* n_boxes, feat_dim)
+        vis_pos = batch['boxes'].to(device).view(B, n_context_images * n_boxes, 4)
+        vis_attention = batch['vis_attention'].to(device).view(B, n_context_images * n_boxes)
+        img_order_ids = batch['img_indexes'].to(device).view(B, n_context_images * n_boxes)
+        obj_order_ids = batch['obj_indexes'].to(device).view(B, n_context_images * n_boxes)
         lm_labels = batch["target_ids"].to(device)
-
         loss_weights = batch["loss_weights"].to(device)
 
         output = self(
             input_ids=input_ids,
-            vis_inputs=(vis_feats, vis_pos),
+            vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),
+            vis_attention_mask=vis_attention,
             labels=lm_labels,
             return_dict=True
         )
@@ -67,9 +69,14 @@ class VLT5Pretraining(VLT5):
     def valid_step(self, batch):
         self.eval()
         device = next(self.parameters()).device
-        vis_feats = batch['vis_feats'].to(device)
-        input_ids = batch['input_ids'].to(device)
-        vis_pos = batch['boxes'].to(device)
+        input_ids = batch['input_ids'].to(device)        
+        B, n_context_images, n_boxes, feat_dim = batch['vis_feats'].shape
+        vis_feats = batch['vis_feats'].to(device).view(B, n_context_images* n_boxes, feat_dim)
+        vis_pos = batch['boxes'].to(device).view(B, n_context_images * n_boxes, feat_dim)
+        vis_attention = batch['vis_attention'].to(device).view(B, n_context_images * n_boxes)
+        img_order_ids = batch['img_indexes'].to(device).view(B, n_context_images * n_boxes)
+        obj_order_ids = batch['obj_indexes'].to(device).view(B, n_context_images * n_boxes)
+
 
         lm_labels = batch["target_ids"].to(device)
 
@@ -77,7 +84,8 @@ class VLT5Pretraining(VLT5):
 
         output = self(
             input_ids=input_ids,
-            vis_inputs=(vis_feats, vis_pos),
+            vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),
+            vis_attention_mask=vis_attention,
             labels=lm_labels,
             return_dict=True
         )
