@@ -4,7 +4,7 @@ import random
 from copy import deepcopy
 
 
-def corrupt_spans(text, mask_ratio=0.15, prefix=None):
+def corrupt_spans(text, mask_ratio=0.15, prefix=None, postfix=None, min_index=0):
     """T5-style Masked Language Modeling with corrupted span prediction
     Args:
         text
@@ -53,19 +53,20 @@ def corrupt_spans(text, mask_ratio=0.15, prefix=None):
                 span = [mask_indices[i+1], mask_indices[i+1]+1]
 
     masked_tokens = deepcopy(tokens)
-
+    max_index = 0
     target_tokens = []
     cum_span_length = 0
     for i, span in enumerate(spans):
         start, end = span
 
         masked_tokens[start-cum_span_length+i: end -
-                      cum_span_length+i] = [f'<extra_id_{i}>']
+                      cum_span_length+i] = [f'<extra_id_{min_index + i}>']
 
-        target_tokens.append(f'<extra_id_{i}>')
+        target_tokens.append(f'<extra_id_{min_index + i}>')
         target_tokens.extend(tokens[start:end])
 
         cum_span_length += (end - start)
+        max_index = max(max_index, i + min_index)
 
     # target_tokens.append(f'<extra_id_{i+1}>')
     # target_tokens.append(f'</s>')
@@ -77,9 +78,14 @@ def corrupt_spans(text, mask_ratio=0.15, prefix=None):
     else:
         source_text = f"{prefix} {masked_text}"
 
+    if postfix is None:
+        source_text = masked_text
+    else:
+        source_text = f"{masked_text} {postfix}"
+
     target_text = " ".join(target_tokens)
 
-    return source_text, target_text
+    return source_text, target_text, max_index + 1
 
 
 def corrupt_bart(input_text, mask_ratio=0.30, prefix="denoise text:"):
@@ -154,7 +160,7 @@ def corrupt_bart(input_text, mask_ratio=0.30, prefix="denoise text:"):
     return source_text, target_text
 
 
-def ground_caption(captions, n_ground=1, prefix="describe visual inputs:", sort=True):
+def ground_caption(captions, ground_indices, n_ground=1, prefix="describe visual inputs:", sort=True):
     """
     For VG
 
@@ -186,15 +192,9 @@ def ground_caption(captions, n_ground=1, prefix="describe visual inputs:", sort=
     target_text
         red crayon
     """
-
     n_boxes = len(captions)
 
-    if sort:
-        ground_indices = torch.randperm(n_boxes)[:n_ground].sort().values
-    else:
-        ground_indices = torch.randperm(n_boxes)[:n_ground]
-
-    ground_indices = ground_indices.tolist()
+    ground_indices = ground_indices[:n_ground]
 
     source_text = [prefix]
     target_text = []
@@ -202,13 +202,13 @@ def ground_caption(captions, n_ground=1, prefix="describe visual inputs:", sort=
     if n_ground == 1:
         idx = ground_indices[0]
         source_text.append(f'<vis_extra_id_{idx}>')
-        target_text.append(f'{captions[idx]}')
+        target_text.append(f'{captions[0]}')
     else:
         for j, idx in enumerate(ground_indices):
             source_text.append(f'<vis_extra_id_{idx}>')
 
             target_text.append(f'<extra_id_{j}>')
-            target_text.append(f'{captions[idx]}')
+            target_text.append(f'{captions[j]}')
 
     # target_text.append('</s>')
 
@@ -219,7 +219,7 @@ def ground_caption(captions, n_ground=1, prefix="describe visual inputs:", sort=
     return source_text, target_text
 
 
-def refer_expression(captions, n_ground=1, prefix="refer expressions:", sort=True):
+def refer_expression(captions, ground_indices, n_ground=1, prefix="refer expressions:", sort=True):
     """
 
     n_ground > 1
@@ -240,25 +240,18 @@ def refer_expression(captions, n_ground=1, prefix="refer expressions:", sort=Tru
     """
     n_boxes = len(captions)
 
-    if sort:
-        ground_indices = torch.randperm(n_boxes)[:n_ground].sort().values
-    else:
-        ground_indices = torch.randperm(n_boxes)[:n_ground]
-
-    ground_indices = ground_indices.tolist()
-
+    ground_indices = ground_indices[:n_ground]
     source_text = [prefix]
     target_text = []
 
     if n_ground == 1:
         idx = ground_indices[0]
-        source_text.append(f'{captions[idx]}')
+        source_text.append(f'{captions[0]}')
         target_text.append(f'<vis_extra_id_{idx}>')
     else:
-
         for j, idx in enumerate(ground_indices):
             source_text.append(f'<extra_id_{j}>')
-            source_text.append(f'{captions[idx]}')
+            source_text.append(f'{captions[j]}')
 
             target_text.append(f'<vis_extra_id_{idx}>')
 

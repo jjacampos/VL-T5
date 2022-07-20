@@ -6,7 +6,7 @@ import torch
 
 from pathlib import Path
 
-datasets_dir = Path(__file__).resolve().parent.parent.parent.joinpath('datasets')
+datasets_dir = Path("/fsx/jacampos/data/pretraining/datasets")
 
 class AnswerTable:
     ANS_CONVERT = {

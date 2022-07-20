@@ -22,6 +22,8 @@
 ## number of tasks per node
 #SBATCH --ntasks-per-node=1
 
+#SBATCH --account all
+
 #SBATCH --array=1-4
 
 ### Section 2: Setting environment variables for the job
@@ -55,19 +57,19 @@ python -m torch.distributed.launch \
         --master_port=${master_port[$SLURM_ARRAY_TASK_ID-1]} \
         ../src/comet.py \
         --distributed --multiGPU \
-        --train_path /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_train_just_mm.json \
-        --valid_path  /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_val_just_mm.json \
-        --test_path /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_test_just_mm.json\
+        --train_path /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_train.json \
+        --valid_path  /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_val.json \
+        --test_path /fsx/jacampos/data/comet/split_v2/just_mm/mem_dials_gpt2_test.json\
 	    --coco_annotations_path /data/datasets01/COCO/060817/annotations/instances_train2014.json \
 	    --memory_files /fsx/jacampos/data/comet/split_v2/memory_may21_v1_100graphs.json /fsx/jacampos/data/comet/split_v2/mscoco_memory_graphs_1k.json\
-	    --coco_features_path /fsx/jacampos/data/COCO_Features/COCO/features/train2014_obj36.h5 \
+	    --coco_features_path /fsx/jacampos/data/pretraining/datasets/COCO/features/train2014_obj36.h5 \
 	    --special_tokens_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_special_tokens.json \
 	    --do_train \
         --optim adamw \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \
-        --epochs 10 \
+        --epochs 20 \
         --num_workers 8 \
         --backbone 't5-base' \
         --num_beams 5 \

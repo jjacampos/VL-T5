@@ -28,7 +28,7 @@ _use_apex = False
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
-    from transormers.file_utils import is_apex_available
+    from transformers.file_utils import is_apex_available
     if is_apex_available():
         from apex import amp
     _use_apex = True
@@ -158,7 +158,7 @@ class Trainer(TrainerBase):
             for step_i, batch in enumerate(self.train_loader):
 
                 if self.args.fp16 and _use_native_amp:
-                    with autocast():
+                    with autocast(dtype=torch.bfloat16):
                         if self.args.distributed:
                             results = self.model.module.train_step(batch)
                         else:
@@ -237,6 +237,9 @@ class Trainer(TrainerBase):
 
                     pbar.set_description(desc_str)
                     pbar.update(1)
+                
+                if global_step % args.checkpoint_after == 0:
+                    self.save(f"Checkpoint-{global_step}")
 
             if self.verbose:
                 pbar.close()
@@ -263,7 +266,6 @@ class Trainer(TrainerBase):
                 print(losses_str)
 
             dist.barrier()
-
             # Validation
             valid_results, valid_uid2ans = self.evaluate_epoch(epoch=epoch)
 

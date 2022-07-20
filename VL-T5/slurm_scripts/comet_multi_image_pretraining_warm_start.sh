@@ -61,6 +61,6 @@ python -m torch.distributed.launch \
         --use_mem_ids \
         --match_text_image \
         --n_boxes 10 \
-        --individual_vis_layer_norm true \
+        --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 
 
 

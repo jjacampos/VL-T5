@@ -160,14 +160,14 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument("--tasks", type=str, default='')
 
     # COMET
-    parser.add_argument("--train_path", required=True)
-    parser.add_argument("--valid_path", required=True)
-    parser.add_argument("--test_path", default=None)
+    parser.add_argument("--train_path")
+    parser.add_argument("--valid_path")
+    parser.add_argument("--test_path")
     parser.add_argument("--special_tokens_path", default=None)
 
-    parser.add_argument("--coco_annotations_path", required=True)
-    parser.add_argument("--memory_files", required=True, nargs='+')
-    parser.add_argument("--coco_features_path", required=True)
+    parser.add_argument("--coco_annotations_path")
+    parser.add_argument("--memory_files", nargs='+')
+    parser.add_argument("--coco_features_path")
 
     parser.add_argument('--do_train', action='store_true')
     parser.add_argument('--do_test', action='store_true')
@@ -179,6 +179,10 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--match_text_image', action='store_true')
     parser.add_argument('--just_text_features', action='store_true')
     parser.add_argument('--just_text_model', action='store_true')
+    
+    # Multi image pre training
+    parser.add_argument('--max_context', type=int, default=4)
+    parser.add_argument('--checkpoint_after', type=int, default=5000)
 
     # Etc.
     parser.add_argument('--comment', type=str, default='')

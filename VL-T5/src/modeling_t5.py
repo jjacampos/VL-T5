@@ -4,7 +4,6 @@ from transformers.models.t5.modeling_t5 import (
     T5Stack, T5Block, T5LayerNorm, T5LayerSelfAttention, T5LayerFF, T5LayerCrossAttention,
     T5PreTrainedModel, T5ForConditionalGeneration
 )
-
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
@@ -98,7 +97,6 @@ class VisualEmbedding(nn.Module):
             relative_vis_pos_embedding: [B, N, N, n_heads]
             absolute_vis_pos_embedding: # [B, N, d_model]
         """
-
         B, N, _ = feats.size()
         assert pos.size() == (B, N, 4)
 
@@ -121,7 +119,6 @@ class VisualEmbedding(nn.Module):
             # HERE IS THE CHANGE FOR ADDING WORD EMBEDDING TO IMAGE
             if self.config.use_mem_ids:
                 if self.config.match_text_image:
-                    img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
                     img_order_embedding = self.obj_order_embedding(img_order_ids)
                 else:
                     img_order_embedding = self.img_order_embedding(img_order_ids)                 
@@ -130,7 +127,6 @@ class VisualEmbedding(nn.Module):
                 obj_order_ids = obj_order_ids.unsqueeze(0) #.expand(B,-1)
             # assert obj_order_ids.max().item() < 32200, obj_order_ids
             # CHANGE THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
-            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 116 - 1
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
             if self.config.use_mem_ids:
                 vis_embedding = feat_embedding + absolute_vis_pos_embedding + \
@@ -192,7 +188,7 @@ class JointEncoder(T5Stack):
         output_hidden_states=None,
         return_dict=None,
     ):
-
+        
         if inputs_embeds is None:
             assert self.embed_tokens is not None, "You have to initialize the model with valid token embeddings"
             inputs_embeds = self.embed_tokens(input_ids)
@@ -212,7 +208,6 @@ class JointEncoder(T5Stack):
                 img_order_ids = vis_inputs[2]
             if len(vis_inputs) == 4:
                 obj_order_ids = vis_inputs[3]
-
             vis_embeds = self.visual_embedding(vis_feats, boxes, img_order_ids, obj_order_ids)
 
             V_L = vis_embeds.size(1)

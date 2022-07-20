@@ -19,10 +19,12 @@
 ## number of gpus
 #SBATCH --gpus-per-node=1
 
+#SBATCH --account all
+
 ## number of tasks per node
 #SBATCH --ntasks-per-node=1
 
-#SBATCH --array=1-12
+#SBATCH --array=1-13
 
 ### Section 2: Setting environment variables for the job
 ### Remember that all the module command does is set environment
@@ -48,7 +50,8 @@ paths=("vlt5/text_image_features/no_mem_ids/global" \
 "t5/text_image_features/no_img_text_matching/global" \
 "t5/text_image_features/no_img_text_matching/normal" \
 "t5/text_image_features/img_text_matching/global" \
-"t5/text_image_features/img_text_matching/normal")
+"t5/text_image_features/img_text_matching/normal" \
+"mi_pretraining/text_image_features/img_text_matching/normal/Epoch37")
 hyperparams=("--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --randomization random_global --run_name vlt5_mm_no_mem_global" \
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --randomization no_random --run_name vlt5_mm_no_mem_normal" \
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --randomization random_global --use_mem_ids --run_name vlt5_mm_no_matching_global" \
@@ -60,8 +63,9 @@ hyperparams=("--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrai
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization random_global --use_mem_ids --run_name t5_mm_no_matching_global" \
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization no_random --use_mem_ids --run_name t5_mm_no_matching_normal" \
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization random_global --use_mem_ids --match_text_image --run_name t5_mm_matching_global" \
-"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization no_random --use_mem_ids --match_text_image --run_name t5_mm_matching_normal")
-master_port=(11111 22222 33333 44444 55555 17171 14141 19191 16161 10101 12121 13131)
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization no_random --use_mem_ids --match_text_image --run_name t5_mm_matching_normal" \
+"--load  /fsx/jacampos/experiments/pretraining/warm_start/Epoch37 --randomization no_random --use_mem_ids --match_text_image --run_name mi_pretraining_mm_matching_normal_epoch37")
+master_port=(11111 22222 33333 44444 55555 17171 14141 19191 16161 10101 12121 13131 14141)
 echo $SLURM_ARRAY_TASK_ID
 echo ${paths[$SLURM_ARRAY_TASK_ID-1]}
 mkdir -p $base_path${paths[$SLURM_ARRAY_TASK_ID-1]}/valid
@@ -80,21 +84,20 @@ python -m torch.distributed.launch \
         --test_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_test.json\
 	    --coco_annotations_path /data/datasets01/COCO/060817/annotations/instances_train2014.json \
 	    --memory_files /fsx/jacampos/data/comet/split_v2/memory_may21_v1_100graphs.json /fsx/jacampos/data/comet/split_v2/mscoco_memory_graphs_1k.json\
-	    --coco_features_path /fsx/jacampos/data/COCO_Features/COCO/features/train2014_obj36.h5 \
+	    --coco_features_path /fsx/jacampos/data/pretraining/datasets/COCO/features/train2014_obj36.h5 \
 	    --special_tokens_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_special_tokens.json \
 	    --do_train \
         --optim adamw \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \
-        --epochs 10 \
+        --epochs 20 \
         --num_workers 1 \
         --backbone 't5-base' \
         --num_beams 5 \
         --batch_size 32 \
         --valid_batch_size 32 \
 	--n_boxes 10 \
-	--individual_vis_layer_norm false \
         --output $base_path${paths[$SLURM_ARRAY_TASK_ID-1]} \
         ${hyperparams[$SLURM_ARRAY_TASK_ID-1]}
        

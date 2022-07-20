@@ -19,6 +19,8 @@
 ## number of gpus
 #SBATCH --gpus-per-node=1
 
+#SBATCH --account all
+
 ## number of tasks per node
 #SBATCH --ntasks-per-node=1
 
@@ -80,14 +82,14 @@ python -m torch.distributed.launch \
         --test_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_test.json\
 	    --coco_annotations_path /data/datasets01/COCO/060817/annotations/instances_train2014.json \
 	    --memory_files /fsx/jacampos/data/comet/split_v2/memory_may21_v1_100graphs.json /fsx/jacampos/data/comet/split_v2/mscoco_memory_graphs_1k.json\
-	    --coco_features_path /fsx/jacampos/data/COCO_Features/COCO/features/train2014_obj36.h5 \
+	    --coco_features_path /fsx/jacampos/data/pretraining/datasets/COCO/features/train2014_obj36.h5 \
 	    --special_tokens_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_special_tokens.json \
 	    --do_train \
         --optim adamw \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
         --lr 5e-5 \
-        --epochs 10 \
+        --epochs 20 \
         --num_workers 1 \
         --backbone 'facebook/bart-base' \
         --num_beams 5 \

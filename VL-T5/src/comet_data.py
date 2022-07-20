@@ -22,7 +22,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, randomization_type, verbose=True, num_turns=2):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -36,7 +36,7 @@ class COMETFineTuneDataset(Dataset):
         
         self.tokenizer = tokenizer
 
-        self.randomization_type = args.randomization
+        self.randomization_type = randomization_type
         self.num_turns = num_turns
 
         self.args = args
@@ -88,6 +88,14 @@ class COMETFineTuneDataset(Dataset):
         return feats, boxes
         
 
+
+    def _generate_obj_ids_(self, img_ids, nboxes):
+        obj_ids = []
+        for img_id in img_ids:
+            for i in range(nboxes):
+                obj_ids.append(img_id * nboxes + i)
+        return obj_ids
+
     # TODO many things can be moved to initialization
     def __getitem__(self, idx):
 
@@ -125,6 +133,7 @@ class COMETFineTuneDataset(Dataset):
             feats, boxes = self._get_image_features(memory_ids)
             out_dict = {'boxes':boxes,
                     'vis_feats': feats}
+                    
 
         # Get the img_order_ids
         img_order_ids = []
@@ -134,18 +143,20 @@ class COMETFineTuneDataset(Dataset):
         # Add one padding if we don't have memories in context
         if len(img_order_ids) == 0:
             img_order_ids += [self.tokenizer.pad_token_id] * self.n_boxes
-
+        img_order_ids_old = img_order_ids
+        img_order_encoded = self.tokenizer.encode([f'<img_extra_id_{index}>' for index in img_order_ids], add_special_tokens=False)
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
+        img_order_encoded = torch.LongTensor(img_order_encoded).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
         # Use local context for image ids
         for index, memory in enumerate(memory_ids[:self.max_images]):
-            input_sentence = input_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
-            target_sentence = target_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
+            input_sentence = input_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
+            target_sentence = target_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
 
         # If the target memory is not in the context just use mem_id_99 as unknown for consistency
         for memory in re.findall(f'(\d+)', target_sentence):
             if int(memory) in self.coco_mapping:
-                target_sentence = target_sentence.replace(f'{memory}', ' mem_id_99 ')
+                target_sentence = target_sentence.replace(f'{memory}', ' <img_extra_id_99> ')
         
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
@@ -158,6 +169,9 @@ class COMETFineTuneDataset(Dataset):
         example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids, order)]
         out_dict['example'] = example
         out_dict['img_order_ids'] = img_order_ids
+        out_dict['img_order_encoded'] = img_order_encoded
+        out_dict['obj_order_ids'] = torch.LongTensor(self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in self._generate_obj_ids_(list(set(img_order_ids_old)), self.n_boxes)]\
+            , add_special_tokens=False))
         return out_dict
 
 
@@ -179,6 +193,8 @@ class COMETFineTuneDataset(Dataset):
             vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
             # Use pad token for img_order ids padding. 
             img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
+            img_order_encoded = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
+            obj_order_ids = torch.ones(B, max_images_context * num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
 
         for i, entry in enumerate(batch):
             input_ids[i, :len(entry['input_ids'])] = entry['input_ids']            
@@ -191,6 +207,8 @@ class COMETFineTuneDataset(Dataset):
                 boxes[i,:entry['boxes'].size(0)] += entry['boxes']
                 vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
                 img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']
+                img_order_encoded[i, :entry['img_order_ids'].size(0)] = entry['img_order_encoded']
+                obj_order_ids[i, :entry['obj_order_ids'].size(0)] = entry['obj_order_ids']
 
         word_mask = target_ids != self.tokenizer.pad_token_id
         target_ids[~word_mask] = -100
@@ -207,7 +225,9 @@ class COMETFineTuneDataset(Dataset):
                 'img_order_ids': img_order_ids,
                 'input_ids': input_ids,
                 'target_ids': target_ids,
-                'examples': [elem['example'] for elem in batch]}
+                'img_order_encoded': img_order_encoded,
+                'examples': [elem['example'] for elem in batch],
+                'obj_order_ids':obj_order_ids}
     
         return out_dict
 
@@ -215,19 +235,19 @@ class COMETEvaluator:
     
     def evaluate(self, predicts, examples, test_file, output_path):
 
-        test_file = test_file.replace('_gpt2', '')
-        test_file = test_file.replace('_just_mm', '')
+        test_file = os.path.join("/fsx/jacampos/data/comet/split_v2/", test_file.replace('_gpt2', '').split('/')[-1])
+        #test_file = test_file.replace('_just_mm', '')
         correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes
         for i in range(len(predicts)):
             orig_prediction = predicts[i]
-            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '')
+            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '').replace('<unk>', '<')
             for mapping in examples[i]['mapping']:
-                cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
+                cur_pred = cur_pred.replace(f'<img_extra_id_{mapping[1]}>', f'{mapping[0]}')
             # If there are still mem_ids in the pred but there were no mapping in context remove them. 
-            remaining = re.findall('(mem_id_[0-9]*)', cur_pred)
+            remaining = re.findall('(<img_extra_id_[0-9]*>)', cur_pred)
             for to_remove in remaining:
-                if to_remove == 'mem_id_99':
+                if to_remove == '<img_extra_id_99>':
                     correct_unknown += 1
                 else:
                     incorrect_unknown += 1
@@ -254,7 +274,7 @@ class COMETEvaluator:
             output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
         except:
             output_report = {}
-        print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown} // Accuracy: {correct_unknown/(correct_unknown+incorrect_unknown)}')
+        print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown}')
 
         return output_report
         

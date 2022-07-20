@@ -72,11 +72,10 @@ class VLT5Pretraining(VLT5):
         input_ids = batch['input_ids'].to(device)        
         B, n_context_images, n_boxes, feat_dim = batch['vis_feats'].shape
         vis_feats = batch['vis_feats'].to(device).view(B, n_context_images* n_boxes, feat_dim)
-        vis_pos = batch['boxes'].to(device).view(B, n_context_images * n_boxes, feat_dim)
+        vis_pos = batch['boxes'].to(device).view(B, n_context_images * n_boxes, 4)
         vis_attention = batch['vis_attention'].to(device).view(B, n_context_images * n_boxes)
         img_order_ids = batch['img_indexes'].to(device).view(B, n_context_images * n_boxes)
         obj_order_ids = batch['obj_indexes'].to(device).view(B, n_context_images * n_boxes)
-
 
         lm_labels = batch["target_ids"].to(device)
 

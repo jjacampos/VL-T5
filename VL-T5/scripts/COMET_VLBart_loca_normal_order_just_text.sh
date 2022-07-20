@@ -19,10 +19,13 @@ python -m torch.distributed.launch \
         --lr 5e-5 \
         --epochs 10 \
         --num_workers 1 \
-        --backbone 'facebook/bart-base' \
+        --backbone 't5-base' \
         --output /fsx/jacampos/experiments/vl-seq2seq/output_just_text \
+        --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 \
         --num_beams 5 \
         --batch_size 40 \
         --valid_batch_size 100 \
 	--n_boxes 10 \
         --use_mem_ids \
+        --just_text_features \
+        --just_text_model

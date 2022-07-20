@@ -24,7 +24,7 @@ python -m torch.distributed.launch \
         --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 \
         --num_beams 5 \
         --batch_size 40 \
-        --valid_batch_size 80 \
+        --valid_batch_size 60 \
 	--n_boxes 10 \
         --use_mem_ids \
         --randomization random_local

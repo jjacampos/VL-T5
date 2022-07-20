@@ -46,7 +46,7 @@ def make_uid(img_id, dset, sent_idx):
     return "%s_%s_%03d" % (img_id, dset, sent_idx)
 
 
-def get_datum(datum):
+def get_datum(datum, max_num_captions=5):
 
     data = []
     _sents = []
@@ -106,7 +106,7 @@ def get_datum(datum):
                     added = True
 
 
-        for sent_idx, sent in enumerate(sents):
+        for sent_idx, sent in enumerate(sents[:max_num_captions]):
 
             if ('t5' in datum['backbone'] or 'bart' in datum['backbone']) and len(sent.split()) <= 2:
                 continue

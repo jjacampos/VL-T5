@@ -117,7 +117,6 @@ class VisualEmbedding(nn.Module):
             # HERE IS THE CHANGE FOR ADDING WORD EMBEDDING TO IMAGE
             if self.config.use_mem_ids:
                 if self.config.match_text_image:
-                    img_order_ids = self.obj_order_embedding.num_embeddings - img_order_ids - 1
                     img_order_embedding = self.obj_order_embedding(img_order_ids)
                 else:
                     img_order_embedding = self.img_order_embedding(img_order_ids)
@@ -132,8 +131,6 @@ class VisualEmbedding(nn.Module):
                 obj_order_ids = torch.arange(N, dtype=torch.long, device=device)
                 obj_order_ids = obj_order_ids.unsqueeze(0)
             # print('raw obj_order_ids', obj_order_ids)
-            # CHANGED THIS AS WE HAVE 100 IMAGE EMBEDDINGS NOW
-            obj_order_ids = self.obj_order_embedding.num_embeddings - obj_order_ids - 115 -  1
             # print('re-indexed obj_order_ids', obj_order_ids)
             obj_order_embedding = self.obj_order_embedding(obj_order_ids)
             if self.config.use_mem_ids:

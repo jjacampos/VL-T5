@@ -4,8 +4,8 @@
 export TRANSFORMERS_CACHE=/fsx/jacampos/experiments/vl-seq2seq/transformers
 export MASTER_ADDR=12345
 
-torchrun  --nproc_per_node=$1 \
-	  --master_port=$MASTER_ADDR \
+python -m torch.distributed.launch \
+    --nproc_per_node=1 \
     ../src/comet.py \
         --distributed --multiGPU \
         --train_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_train.json \
@@ -13,10 +13,9 @@ torchrun  --nproc_per_node=$1 \
         --test_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_test.json\
 	--coco_annotations_path /data/datasets01/COCO/060817/annotations/instances_train2014.json \
 	--memory_files /fsx/jacampos/data/comet/split_v2/memory_may21_v1_100graphs.json /fsx/jacampos/data/comet/split_v2/mscoco_memory_graphs_1k.json\
-	--coco_features_path /fsx/jacampos/data/COCO_Features/COCO/features/train2014_obj36.h5 \
+	--coco_features_path /fsx/jacampos/data/pretraining/datasets/COCO/features/train2014_obj36.h5 \
 	--special_tokens_path /fsx/jacampos/data/comet/split_v2/mem_dials_gpt2_special_tokens.json \
 	--do_train \
-	--do_test \
         --optim adamw \
         --warmup_ratio 0.1 \
         --clip_grad_norm 5 \
@@ -28,7 +27,7 @@ torchrun  --nproc_per_node=$1 \
         --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 \
         --num_beams 5 \
         --batch_size 30 \
-        --do_test \
         --valid_batch_size 60 \
-	#--n_boxes 10 \
-
+	--n_boxes 10 \
+        --use_mem_ids \
+        --match_text_image 

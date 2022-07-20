@@ -92,6 +92,10 @@ class TrainerBase(object):
         config.match_text_image = args.match_text_image
         config.just_text_model = args.just_text_model
 
+        config.multi_image_pretrain = True if '/fsx/jacampos/experiments/pretraining' in self.args.load else False
+
+
+
         return config
 
 
@@ -114,7 +118,7 @@ class TrainerBase(object):
         if 't5' in self.args.tokenizer:
             if self.args.use_vision:
                 # tokenizer_class = VLT5Tokenizer
-                tokenizer_class = T5TokenizerFast
+                tokenizer_class = T5Tokenizer
             else:
                 # tokenizer_class = T5Tokenizer
                 tokenizer_class = T5TokenizerFast
@@ -183,14 +187,36 @@ class TrainerBase(object):
             if key.startswith("model.vis_encoder."):
                 new_key = 'model.encoder.' + key[len("model.vis_encoder."):]
                 state_dict[new_key] = state_dict.pop(key)
-        
-        # Small hack for loading when mismatch of image embeddings shapes
-        if 't5' in self.args.backbone:        
+        # Small hack for loading when mismatch of image embeddings shapes or word embeddings
+        if 't5' in self.args.backbone:   
+            n_embeds, dim = state_dict['shared.weight'].shape     
+            """
             state_dict['encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.img_order_embedding.weight'], \
                 self.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
+            """
+            state_dict.pop('encoder.visual_embedding.img_order_embedding.weight')
+            state_dict['shared.weight'] = torch.cat((state_dict['shared.weight'], self.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
+            state_dict['lm_head.weight'] = torch.cat((state_dict['lm_head.weight'], self.model.lm_head._parameters['weight'][n_embeds:]))
+            state_dict['encoder.visual_embedding.obj_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.obj_order_embedding.weight'], \
+            self.model.encoder.visual_embedding.obj_order_embedding._parameters['weight'][n_embeds:]))
+            state_dict['encoder.embed_tokens.weight'] = torch.cat((state_dict['encoder.embed_tokens.weight'], self.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
+            state_dict['decoder.embed_tokens.weight'] = torch.cat((state_dict['decoder.embed_tokens.weight'], self.model.decoder.embed_tokens._parameters['weight'][n_embeds:]))
         else:
+            n_embeds, dim = state_dict['model.shared.weight'].shape 
+            """ 
             state_dict['model.encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['model.encoder.visual_embedding.img_order_embedding.weight'], \
                 self.model.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
+            """
+            state_dict.pop('model.encoder.visual_embedding.img_order_embedding.weight')
+            state_dict['model.shared.weight'] = torch.cat((state_dict['model.shared.weight'], self.model.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
+            state_dict['lm_head.weight'] = torch.cat((state_dict['lm_head.weight'], self.model.lm_head._parameters['weight'][n_embeds:]))
+            state_dict['model.encoder.visual_embedding.obj_order_embedding.weight'] = torch.cat((state_dict['model.encoder.visual_embedding.obj_order_embedding.weight'], \
+            self.model.model.encoder.visual_embedding.obj_order_embedding._parameters['weight'][n_embeds:]))
+            state_dict['model.encoder.embed_tokens.weight'] = torch.cat((state_dict['model.encoder.embed_tokens.weight'], self.model.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
+            state_dict['model.decoder.embed_tokens.weight'] = torch.cat((state_dict['model.decoder.embed_tokens.weight'], self.model.model.decoder.embed_tokens._parameters['weight'][n_embeds:]))
+            state_dict.pop('final_logits_bias')
+            #state_dict['final_logits_bias'] = torch.cat((state_dict['final_logits_bias'], self.model.final_logits_bias['weight'][0,n_embeds:]))
+
         
         results = self.model.load_state_dict(state_dict, strict=False)
         if self.verbose:
