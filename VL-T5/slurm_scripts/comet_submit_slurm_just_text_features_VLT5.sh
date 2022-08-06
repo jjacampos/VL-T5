@@ -39,10 +39,14 @@ module purge
 source /data/home/jacampos/miniconda/etc/profile.d/conda.sh
 conda activate vlt5
 base_path="/fsx/jacampos/experiments/vl-seq2seq/exploration/"
-paths=("vlt5/just_text_features/global_order" "vlt5/just_text_features/normal_order" "t5/just_text_features/global_order" "t5/just_text_features/normal_order")
+paths=("vlt5/just_text_features/global_order" \
+"vlt5/just_text_features/normal_order" \
+"t5/just_text_features/global_order" \
+"t5/just_text_features/normal_order")
 hyperparams=("--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --randomization random_global --just_text_features --run_name vlt5_just_text_global" \
 "--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --randomization no_random --just_text_features --run_name vlt5_just_text_normal" \
-"--randomization random_global --just_text_features --just_text_model --run_name t5_just_text_global" "--randomization no_random --just_text_features --just_text_model --run_name t5_just_text_normal")
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization random_global --just_text_features --just_text_model --run_name t5_just_text_global" \
+"--load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 --just_text_model --randomization no_random --just_text_features --just_text_model --run_name t5_just_text_normal")
 master_port=(12345 12346 12347 12348)
 echo $SLURM_ARRAY_TASK_ID
 echo ${paths[$SLURM_ARRAY_TASK_ID-1]}

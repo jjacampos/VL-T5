@@ -78,7 +78,7 @@ python -m torch.distributed.launch \
         --valid_batch_size 32 \
 	--n_boxes 10 \
 	--individual_vis_layer_norm false \
-        --output $base_path${paths[$SLURM_ARRAY_TASK_ID-1]} \
+        --output $base_path${paths[$SLURM_ARRAY_TASK_ID
         ${hyperparams[$SLURM_ARRAY_TASK_ID-1]}
        
 

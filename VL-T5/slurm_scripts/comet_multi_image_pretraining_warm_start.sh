@@ -40,7 +40,7 @@ conda activate vlt5
 # The name of experiment
 name=multi_image_pretrain
 
-output=/fsx/jacampos/experiments/pretraining/warm_start/
+output=/fsx/jacampos/experiments/pretraining/warm_start_15_images/
 
 python -m torch.distributed.launch \
     --nproc_per_node=4 \
@@ -61,6 +61,5 @@ python -m torch.distributed.launch \
         --use_mem_ids \
         --match_text_image \
         --n_boxes 10 \
-        --load  /fsx/jacampos/experiments/vl-seq2seq/pretrain/snap/pretrain/VLT5/Epoch30 
-
+        --load /fsx/jacampos/experiments/pretraining/warm_start_15_images/Epoch40
 
