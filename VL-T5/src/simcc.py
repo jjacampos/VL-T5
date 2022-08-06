@@ -2,7 +2,7 @@ import dist_utils
 from pprint import pformat
 import numpy as np
 from packaging import version
-from comet_data import COMETFineTuneDataset, COMETEvaluator
+from simcc_data import SIMMCFineTuneDataset, SIMMCEvaluator
 import logging
 from tqdm import tqdm
 from pathlib import Path
@@ -20,7 +20,7 @@ from utils import get_memories_mappings
 from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 import h5py
-
+import transformers
 
 from utils import load_state_dict, LossMeter, set_global_logging_level
 from trainer_base import TrainerBase
@@ -31,7 +31,7 @@ _use_apex = False
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
-    from transormers.file_utils import is_apex_available
+    from transformers.file_utils import is_apex_available
     if is_apex_available():
         from apex import amp
     _use_apex = True
@@ -41,7 +41,7 @@ else:
 
 
 class Trainer(TrainerBase):
-    def __init__(self, args, memories_to_coco_ids, coco_features, train=True):
+    def __init__(self, args, train=True):
         super().__init__(
             args,
             train=train)
@@ -49,22 +49,22 @@ class Trainer(TrainerBase):
         if not self.verbose:
             set_global_logging_level(logging.ERROR, ["transformers"])
 
-        from comet_model import VLT5COMET, VLBartCOMET
+        from simcc_model import VLT5SIMMC, VLBartSIMMC
 
         self.wandb_initialized = False
         
         model_kwargs = {}
         if 't5' in args.backbone:
-            model_class = VLT5COMET
+            model_class = VLT5SIMMC
         elif 'bart' in args.backbone:
-            model_class = VLBartCOMET
-        
+            model_class = VLBartSIMMC
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
+                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1) ]
             special_tokens_dict = {
                 'additional_special_tokens': additional_special_tokens}
             num_added_toks = self.tokenizer.add_special_tokens(
@@ -72,18 +72,24 @@ class Trainer(TrainerBase):
 
             config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids(
                 [f'<vis_extra_id_{i}>' for i in range(100)])
-        
+
+        # Add SIMMC special tokens
+        simmc_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
+        """
+        if 't5' in self.args.tokenizer:
+            self.tokenizer.add_tokens('<')
+        """
+        simmc_added_tokens = self.tokenizer.add_special_tokens(simmc_special_tokens)
+
         self.model = self.create_model(model_class, config, **model_kwargs)
 
         if 't5' in self.args.tokenizer:
-            self.model.resize_token_embeddings(self.tokenizer.vocab_size + num_added_toks)
+            self.model.resize_token_embeddings(self.model.shared.num_embeddings + num_added_toks + simmc_added_tokens)
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(
-                self.model.model.shared.num_embeddings + num_added_toks)
-            if self.verbose:
-                print(f'Vocab resize: {self.tokenizer.vocab_size} -> {self.model.model.shared.num_embeddings}')
-                assert self.model.model.shared.weight is self.model.lm_head.weight
-                assert self.model.model.shared.weight is self.model.model.encoder.visual_embedding.obj_order_embedding.weight
+                self.model.model.shared.num_embeddings + num_added_toks + simmc_added_tokens)
+
+        self.model.tokenizer = self.tokenizer
 
         # Load Checkpoint
         self.start_epoch = None
@@ -91,28 +97,16 @@ class Trainer(TrainerBase):
             ckpt_path = args.load + '.pth'
             self.load_checkpoint(ckpt_path)
 
-        # Add COMET special tokens
-        comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
-        if 't5' in self.args.tokenizer:
-            self.tokenizer.add_tokens('<')
-            
-        comet_special_tokens['additional_special_tokens'] += [f'mem_id_{i}' for i in range(100-1, -1, -1)]
-        comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
-
-        self.model.resize_token_embeddings(len(self.tokenizer))
-
-        self.model.tokenizer = self.tokenizer
-        
         # GPU Options
         print(f'Model Launching at GPU {self.args.gpu}')
         if self.verbose:
             from time import time
             start = time()
         self.model = self.model.to(args.gpu)
-
         print('Building the train loader')
         train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
-        train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        train_dataset = SIMMCFineTuneDataset(train_raw_data, args.features_path, args, self.tokenizer, args.randomization)
+        train_dataset.__getitem__(10)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
                                       batch_size=args.batch_size,
@@ -123,7 +117,7 @@ class Trainer(TrainerBase):
     
         print('Building the val loader')
         val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
-        val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        val_dataset = SIMMCFineTuneDataset(val_raw_data, args.features_path, args, self.tokenizer, "no_random")
         self.val_loader = DataLoader(val_dataset,
                                     batch_size=args.valid_batch_size,
                                     shuffle=False,
@@ -135,7 +129,7 @@ class Trainer(TrainerBase):
 
         print('Building the test loader')
         test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
-        test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        test_dataset = SIMMCFineTuneDataset(test_raw_data, args.features_path, args, self.tokenizer, "no_random")
         self.test_loader = DataLoader(test_dataset,
                                     batch_size=args.valid_batch_size,
                                     shuffle=False,
@@ -165,15 +159,12 @@ class Trainer(TrainerBase):
 
         
         # Initialize evaluator
-        self.evaluator = COMETEvaluator()
+        self.evaluator = SIMMCEvaluator()
             
     def train(self):
 
         # If we just want to evalute
         if self.args.do_test:
-            best_path = os.path.join(self.args.output, 'BEST')
-            self.load(best_path)
-
             test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
 
             return -1
@@ -185,9 +176,9 @@ class Trainer(TrainerBase):
 
             if not self.wandb_initialized:
                 if 't5' in self.args.backbone:
-                    project_name = "VLT5_COMET"
+                    project_name = "VLT5_SIMMC"
                 elif 'bart' in self.args.backbone:
-                    project_name = "VLBart_COMET"
+                    project_name = "VLBart_SIMMC"
 
                 wandb.init(project=project_name)
                 wandb.run.name = self.args.run_name
@@ -317,7 +308,13 @@ class Trainer(TrainerBase):
             valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
 
             if self.verbose:
-                valid_score = valid_results['loss']
+                if self.args.optimize_ja:
+                    try:
+                        valid_score = 1.0 - valid_metrics['joint_accuracy']
+                    except:
+                        valid_score = 1.0
+                else:
+                    valid_score = valid_results['loss']
 
                 if valid_score < best_valid or epoch == 0:
                     best_valid = valid_score
@@ -466,16 +463,9 @@ def main(gpu, args):
         torch.cuda.set_device(args.local_rank)
         dist.init_process_group(backend='nccl')
 
-    # Set the coco API and the mapping from memory ids to coco ids
-    print('Getting mapping memories to coco ids')
-    memories_to_coco_ids = get_memories_mappings(args)
-
-    # Load the coco image features
-    coco_features = h5py.File(args.coco_features_path, 'r')
 
     if args.do_train:
-        
-        trainer = Trainer(args, memories_to_coco_ids, coco_features, train=True)
+        trainer = Trainer(args, train=True)
         trainer.train()
         
 

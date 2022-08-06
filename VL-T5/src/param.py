@@ -173,16 +173,21 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--do_test', action='store_true')
 
     parser.add_argument('--n_images', type=int, default=8)
+    parser.add_argument('--num_turns', type=int, default=2)
 
     parser.add_argument('--randomization', default='no_random', choices=['random_global', 'random_local', 'no_random'])
     parser.add_argument('--use_mem_ids', action='store_true')
     parser.add_argument('--match_text_image', action='store_true')
     parser.add_argument('--just_text_features', action='store_true')
     parser.add_argument('--just_text_model', action='store_true')
+    parser.add_argument('--optimize_ja', action='store_true')
     
     # Multi image pre training
     parser.add_argument('--max_context', type=int, default=4)
     parser.add_argument('--checkpoint_after', type=int, default=5000)
+
+    # SIMMC
+    parser.add_argument("--features_path")
 
     # Etc.
     parser.add_argument('--comment', type=str, default='')
