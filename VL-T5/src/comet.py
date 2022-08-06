@@ -165,9 +165,6 @@ class Trainer(TrainerBase):
 
         # If we just want to evalute
         if self.args.do_test:
-            best_path = os.path.join(self.args.output, 'BEST')
-            self.load(best_path)
-
             test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
 
             return -1
@@ -311,7 +308,13 @@ class Trainer(TrainerBase):
             valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
 
             if self.verbose:
-                valid_score = valid_results['loss']
+                if self.args.optimize_ja:
+                    try:
+                        valid_score = 1.0 - valid_metrics['joint_accuracy']
+                    except:
+                        valid_score = 1.0
+                else:
+                    valid_score = valid_results['loss']
 
                 if valid_score < best_valid or epoch == 0:
                     best_valid = valid_score
