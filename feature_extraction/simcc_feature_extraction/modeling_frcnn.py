@@ -28,6 +28,7 @@ from torch import nn
 from torch.nn.modules.batchnorm import BatchNorm2d
 from torchvision.ops import RoIPool
 from torchvision.ops.boxes import batched_nms, nms
+from processing_image import Preprocess, _scale_box, _clip_box, _scale_box_ours
 
 from utils import WEIGHTS_NAME, Config, cached_path, hf_bucket_url, is_remote_url, load_checkpoint
 
@@ -113,6 +114,7 @@ def pad_list_tensors(
 
 
 def do_nms(boxes, scores, image_shape, score_thresh, nms_thresh, mind, maxd):
+
     scores = scores[:, :-1]
     num_bbox_reg_classes = boxes.shape[1] // 4
     # Convert to Boxes to use the `clip` function ...
@@ -1184,7 +1186,6 @@ class ROIOutputs(object):
         obj_scores_all = self._predict_objs(obj_logits, preds_per_image)  # list of length N
         attr_probs_all, attrs_all = self._predict_attrs(attr_logits, preds_per_image)
         features = features.split(preds_per_image, dim=0)
-
         # fun for each image too, also I can experiment and do multiple images
         final_results = []
         zipped = zip(boxes_all, obj_scores_all, attr_probs_all, attrs_all, sizes)
@@ -1340,7 +1341,8 @@ class Res5ROIHeads(nn.Module):
                     blob/master/detectron2/modeling/roi_heads/roi_heads.py
             """
             raise NotImplementedError()
-
+        
+        
         assert not proposal_boxes[0].requires_grad
         box_features = self._shared_roi_transform(features, proposal_boxes)
         feature_pooled = box_features.mean(dim=[2, 3])  # pooled to 1x1
@@ -1868,55 +1870,78 @@ class GeneralizedRCNN(nn.Module):
         # run images through backbone
         original_sizes = image_shapes * scales_yx
         features = self.backbone(images)
-
         # generate proposals if none are available
         if proposals is None:
             proposal_boxes, _ = self.proposal_generator(images, image_shapes, features, gt_boxes)
         else:
             assert proposals is not None
 
-        # pool object features from either gt_boxes, or from proposals
-        obj_logits, attr_logits, box_deltas, feature_pooled = self.roi_heads(features, proposal_boxes, gt_boxes)
+        if gt_boxes != None:
+            proposal_boxes = gt_boxes.unsqueeze(0).to(images.device)
+            # pool object features from either gt_boxes, or from proposals
+            obj_logits, attr_logits, box_deltas, feature_pooled = self.roi_heads(features, proposal_boxes, gt_boxes)
+            obj_logits, attr_logits = nn.functional.softmax(obj_logits[:,:-1], dim=-1), nn.functional.softmax(attr_logits[:,:-1], dim=-1)
+            class_probs, classes = obj_logits.max(-1)
+            attr_probs, attrs = attr_logits.max(-1)
+            boxes = _scale_box(proposal_boxes.to('cpu'), scales_yx)
+            roi_features = feature_pooled
+            normalized_boxes = norm_box(boxes, original_sizes)
+            preds_per_image  = obj_logits.shape[0]
+            sizes = image_shapes
+            return OrderedDict(
+                {
+                    "obj_ids": classes.to("cpu"),
+                    "obj_probs": class_probs.to("cpu"),
+                    "attr_ids": attrs.to("cpu"),
+                    "attr_probs": attr_probs.to("cpu"),
+                    "boxes": boxes.to("cpu"),
+                    "sizes": sizes.to("cpu"),
+                    "preds_per_image": preds_per_image,
+                    "roi_features": roi_features.to("cpu"),
+                    "normalized_boxes": normalized_boxes.to("cpu"),
+                }
+            )
+        else:
+            # prepare FRCNN Outputs and select top proposals
+            obj_logits, attr_logits, box_deltas, feature_pooled = self.roi_heads(features, proposal_boxes, gt_boxes)
+            boxes, classes, class_probs, attrs, attr_probs, roi_features = self.roi_outputs(
+                obj_logits=obj_logits,
+                attr_logits=attr_logits,
+                box_deltas=box_deltas,
+                pred_boxes=proposal_boxes,
+                features=feature_pooled,
+                sizes=image_shapes,
+                scales=scales_yx,
+            )
 
-        # prepare FRCNN Outputs and select top proposals
-        boxes, classes, class_probs, attrs, attr_probs, roi_features = self.roi_outputs(
-            obj_logits=obj_logits,
-            attr_logits=attr_logits,
-            box_deltas=box_deltas,
-            pred_boxes=proposal_boxes,
-            features=feature_pooled,
-            sizes=image_shapes,
-            scales=scales_yx,
-        )
-
-        # will we pad???
-        subset_kwargs = {
-            "max_detections": kwargs.get("max_detections", None),
-            "return_tensors": kwargs.get("return_tensors", None),
-            "pad_value": kwargs.get("pad_value", 0),
-            "padding": kwargs.get("padding", None),
-        }
-        preds_per_image = torch.tensor([p.size(0) for p in boxes])
-        boxes = pad_list_tensors(boxes, preds_per_image, **subset_kwargs)
-        classes = pad_list_tensors(classes, preds_per_image, **subset_kwargs)
-        class_probs = pad_list_tensors(class_probs, preds_per_image, **subset_kwargs)
-        attrs = pad_list_tensors(attrs, preds_per_image, **subset_kwargs)
-        attr_probs = pad_list_tensors(attr_probs, preds_per_image, **subset_kwargs)
-        roi_features = pad_list_tensors(roi_features, preds_per_image, **subset_kwargs)
-        subset_kwargs["padding"] = None
-        preds_per_image = pad_list_tensors(preds_per_image, None, **subset_kwargs)
-        sizes = pad_list_tensors(image_shapes, None, **subset_kwargs)
-        normalized_boxes = norm_box(boxes, original_sizes)
-        return OrderedDict(
-            {
-                "obj_ids": classes,
-                "obj_probs": class_probs,
-                "attr_ids": attrs,
-                "attr_probs": attr_probs,
-                "boxes": boxes,
-                "sizes": sizes,
-                "preds_per_image": preds_per_image,
-                "roi_features": roi_features,
-                "normalized_boxes": normalized_boxes,
+            # will we pad???
+            subset_kwargs = {
+                "max_detections": kwargs.get("max_detections", None),
+                "return_tensors": kwargs.get("return_tensors", None),
+                "pad_value": kwargs.get("pad_value", 0),
+                "padding": kwargs.get("padding", None),
             }
-        )
+            preds_per_image = torch.tensor([p.size(0) for p in boxes])
+            boxes = pad_list_tensors(boxes, preds_per_image, **subset_kwargs)
+            classes = pad_list_tensors(classes, preds_per_image, **subset_kwargs)
+            class_probs = pad_list_tensors(class_probs, preds_per_image, **subset_kwargs)
+            attrs = pad_list_tensors(attrs, preds_per_image, **subset_kwargs)
+            attr_probs = pad_list_tensors(attr_probs, preds_per_image, **subset_kwargs)
+            roi_features = pad_list_tensors(roi_features, preds_per_image, **subset_kwargs)
+            subset_kwargs["padding"] = None
+            preds_per_image = pad_list_tensors(preds_per_image, None, **subset_kwargs)
+            sizes = pad_list_tensors(image_shapes, None, **subset_kwargs)
+            normalized_boxes = norm_box(boxes, original_sizes)
+            return OrderedDict(
+                {
+                    "obj_ids": classes,
+                    "obj_probs": class_probs,
+                    "attr_ids": attrs,
+                    "attr_probs": attr_probs,
+                    "boxes": boxes,
+                    "sizes": sizes,
+                    "preds_per_image": preds_per_image,
+                    "roi_features": roi_features,
+                    "normalized_boxes": normalized_boxes,
+                }
+            )

@@ -140,6 +140,11 @@ def _scale_box(boxes, scale_yx):
     return boxes
 
 
+def _scale_box_ours(boxes, scale_yx):
+    boxes[:, 0::2] /= scale_yx[:, 1]
+    boxes[:, 1::2] /= scale_yx[:, 0]
+    return boxes
+
 def _clip_box(tensor, box_size: Tuple[int, int]):
     assert torch.isfinite(tensor).all(), "Box tensor contains infinite or NaN!"
     h, w = box_size

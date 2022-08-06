@@ -94,8 +94,6 @@ class TrainerBase(object):
 
         config.multi_image_pretrain = True if '/fsx/jacampos/experiments/pretraining' in self.args.load else False
 
-
-
         return config
 
 
