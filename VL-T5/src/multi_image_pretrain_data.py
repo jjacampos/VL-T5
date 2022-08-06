@@ -1070,4 +1070,4 @@ class QAEvaluator:
         return accu, dset2accu
 
     def dump_result(self, uid2ans: dict, path):
-        raise NotImplementedError
+        raise N
