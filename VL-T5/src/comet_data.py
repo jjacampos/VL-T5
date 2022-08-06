@@ -22,7 +22,7 @@ USER = '<USER>'
 
 class COMETFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, randomization_type, verbose=True, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, randomization_type, verbose=True):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -37,7 +37,7 @@ class COMETFineTuneDataset(Dataset):
         self.tokenizer = tokenizer
 
         self.randomization_type = randomization_type
-        self.num_turns = num_turns
+        self.num_turns = args.num_turns
 
         self.args = args
         
@@ -63,7 +63,6 @@ class COMETFineTuneDataset(Dataset):
             # BBoxes
             img_h = self.coco_features[f'{img_id}/img_h'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
-            img_w = self.coco_features[f'{img_id}/img_w'][()]
             boxes = self.coco_features[f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
@@ -87,8 +86,6 @@ class COMETFineTuneDataset(Dataset):
 
         return feats, boxes
         
-
-
     def _generate_obj_ids_(self, img_ids, nboxes):
         obj_ids = []
         for img_id in img_ids:
