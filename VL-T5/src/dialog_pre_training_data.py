@@ -1,10 +1,13 @@
 from collections import defaultdict
+import copy
 import re
 import os
 import random
 import json
 import torch
+from tqdm import tqdm
 import numpy as np
+import stanza
 from torch.utils.data import DataLoader, Dataset, Sampler
 from transformers import T5TokenizerFast, BartTokenizer
 from tokenization import VLT5TokenizerFast
@@ -20,9 +23,9 @@ END_OF_SENTENCE = '<EOS>'
 SYSTEM = '<SYSTEM>'
 USER = '<USER>'
 
-class COMETFineTuneDataset(Dataset):
+class DialPreFineTuneDataset(Dataset):
 
-    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, verbose=True, num_turns=2):
+    def __init__(self, raw_dataset, coco_mapping, coco_features, args, tokenizer, randomization_type, verbose=True):
         super().__init__()
 
         self.raw_dataset = raw_dataset
@@ -35,12 +38,125 @@ class COMETFineTuneDataset(Dataset):
         self.feat_dim = args.feat_dim
         
         self.tokenizer = tokenizer
+        self.losses = args.dialog_losses.split(',')
+        print(self.losses)
 
-        self.randomization_type = args.randomization
-        self.num_turns = num_turns
+        self.randomization_type = randomization_type
+        self.num_turns = args.num_turns
 
         self.args = args
-        
+
+        new_dataset = []
+
+        all_user_utterances, all_system_utterances, all_user_entities, all_system_entities = [], [], [], []
+
+        for datum in self.raw_dataset:
+            input_sentence = datum['predict']
+            user_sentences = [f"<USER> {elem}".strip() for elem in re.findall(f'<USER>(.*?)<SYSTEM>', input_sentence)]
+            system_sentences = [f"<SYSTEM> {elem[0]}".strip() for elem in re.findall(f'<SYSTEM>(.*?)(<USER>|<EOS>)', input_sentence)]
+            all_user_utterances += user_sentences
+            all_system_utterances += system_sentences
+            all_user_entities.append(datum["entities"][0::2])
+            all_system_entities.append(datum["entities"][1::2])
+
+        if "speaker" in self.losses:
+            for user_utterance in all_user_utterances:
+                new_dataset.append({
+                    'predict': f"speaker: {user_utterance.replace('<USER>', '').strip()}",
+                    'target': '<USER>',
+                    'task': 'speaker'})
+            for system_utterance in all_system_utterances:
+                # We don't want memories to appear in this task because it would be trivial for the system
+                new_dataset.append({
+                    'predict': f"speaker: {system_utterance.replace('<SYSTEM>', '').split('<SOM>')[0].strip()}",
+                    'target': '<SYSTEM>',
+                    'task': 'speaker'}) 
+
+
+        for datum in self.raw_dataset:
+            input_sentence = datum['predict']
+            current_user_sentences = [f"<USER> {elem}".strip() for elem in re.findall(f'<USER>(.*?)<SYSTEM>', input_sentence)]
+            current_system_sentences = [f"<SYSTEM> {elem[0]}".strip() for elem in re.findall(f'<SYSTEM>(.*?)(<USER>|<EOS>)', input_sentence)]
+            current_sentences = []
+            current_memories = [memory.strip() for memories in re.findall('<SOM> (.*?) <EOM>', input_sentence) for memory in memories.split(',') if len(memory) > 0 ]
+            for user_ut, system_ut in zip(current_user_sentences, current_system_sentences):
+                current_sentences.append(user_ut)
+                current_sentences.append(system_ut)
+            dialog = " ".join(current_sentences)
+            dialog_len = len(current_sentences)
+
+            if "coherence" in self.losses:
+                input_sentence = datum['predict']
+                if random.uniform(0,1) > 0.5:
+                    utterances_to_modify = random.sample(range(0, dialog_len), random.randint(1, dialog_len))
+                    input_example = ""
+                    for i in range(dialog_len):
+                            if i in utterances_to_modify:
+                                if "<USER>" in current_sentences[i]:
+                                    input_example += f"{random.sample(all_user_utterances, 1)[0]} "
+                                else:
+                                    input_example += f"{random.sample(all_system_utterances, 1)[0]} "
+                            else:
+                                input_example += f"{current_sentences[i]} "
+                    target = 'false'
+                else:
+                    input_example = dialog                             
+                    target = 'true'               
+                new_dataset.append({ 
+                    'predict': f"coherence: {input_example.strip()}", 
+                    'target': target,
+                    'task': 'coherence'
+                    })      
+
+            if "reordering" in self.losses:
+                shuffled_sentences = random.sample(current_sentences, len(current_sentences))
+                original_input = dialog
+                shuffled_target = " ".join(shuffled_sentences)
+                new_dataset.append({
+                    'predict': f"reordering: {shuffled_target}",
+                    'target': original_input,
+                    'task': 'reordering'})
+
+            if "entities" in self.losses:
+                for sentence, entities in zip(current_sentences, datum['entities']):
+                    if len(entities) == 0:
+                        continue
+                    new_dataset.append({ 
+                        'predict': f"entities: {sentence}",
+                        'target': ",".join(entities) if args.use_entity_types else ','.join([elem.split(':')[0] for elem in entities]),
+                        'task': 'entities'}
+                        )
+
+            if "mm_coherence" in self.losses and len(current_memories) > 0:
+                if random.uniform(0,1) > 0.5:
+                    memories_to_modify = random.sample(range(0, len(current_memories)), random.randint(1, len(current_memories)))
+                    input_example = copy.deepcopy(dialog)
+                    for index in memories_to_modify:
+                        input_example = input_example.replace(current_memories[index], str(random.sample(self.coco_mapping.keys(), 1)[0]))
+                    target = "false"
+                else:
+                    input_example = dialog
+                    target = "true"
+                new_dataset.append({ 
+                    'predict': f"coherence: {input_example}", 
+                    'target': target,
+                    'task': 'mm_coherence'
+                    })  
+
+            if "mm_reordering" in self.losses and len(current_memories) > 0:
+                shuffled_memories = random.sample(current_memories, len(current_memories))
+                input_example = copy.deepcopy(dialog)
+                for orig_memory, shuffled_memory in zip(current_memories, shuffled_memories):
+                    # Trick that avoid re substituting a string
+                    input_example = re.sub(f'{orig_memory}([^_])', f'{shuffled_memory}_new\g<1>', input_example)
+                input_example = input_example.replace('_new', '')
+                new_dataset.append({
+                    'predict': f"reordering: {input_example}",
+                    'target': dialog,
+                    'task': 'mm_reordering'})
+                
+        self.raw_dataset = new_dataset
+
     def __len__(self):
         return len(self.raw_dataset)
 
@@ -62,7 +178,6 @@ class COMETFineTuneDataset(Dataset):
 
             # BBoxes
             img_h = self.coco_features[f'{img_id}/img_h'][()]
-            img_w = self.coco_features[f'{img_id}/img_w'][()]
             img_w = self.coco_features[f'{img_id}/img_w'][()]
             boxes = self.coco_features[f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
@@ -87,6 +202,12 @@ class COMETFineTuneDataset(Dataset):
 
         return feats, boxes
         
+    def _generate_obj_ids_(self, img_ids, nboxes):
+        obj_ids = []
+        for img_id in img_ids:
+            for i in range(nboxes):
+                obj_ids.append(img_id * nboxes + i)
+        return obj_ids
 
     # TODO many things can be moved to initialization
     def __getitem__(self, idx):
@@ -125,7 +246,7 @@ class COMETFineTuneDataset(Dataset):
             feats, boxes = self._get_image_features(memory_ids)
             out_dict = {'boxes':boxes,
                     'vis_feats': feats}
-
+                    
         # Get the img_order_ids
         img_order_ids = []
         for i in range(min(self.max_images, len(memory_ids))):
@@ -134,18 +255,20 @@ class COMETFineTuneDataset(Dataset):
         # Add one padding if we don't have memories in context
         if len(img_order_ids) == 0:
             img_order_ids += [self.tokenizer.pad_token_id] * self.n_boxes
-
+        img_order_ids_old = img_order_ids
+        img_order_encoded = self.tokenizer.encode([f'<img_extra_id_{index}>' for index in img_order_ids], add_special_tokens=False)
         img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
+        img_order_encoded = torch.LongTensor(img_order_encoded).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
 
         # Use local context for image ids
         for index, memory in enumerate(memory_ids[:self.max_images]):
-            input_sentence = input_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
-            target_sentence = target_sentence.replace(f'{memory}', f' mem_id_{order[index]} ')
+            input_sentence = input_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
+            target_sentence = target_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
 
         # If the target memory is not in the context just use mem_id_99 as unknown for consistency
         for memory in re.findall(f'(\d+)', target_sentence):
             if int(memory) in self.coco_mapping:
-                target_sentence = target_sentence.replace(f'{memory}', ' mem_id_99 ')
+                target_sentence = target_sentence.replace(f'{memory}', ' <img_extra_id_99> ')
         
         # TODO use different tokens for API and normal generation now just using "comet" as input
         input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
@@ -158,6 +281,10 @@ class COMETFineTuneDataset(Dataset):
         example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids, order)]
         out_dict['example'] = example
         out_dict['img_order_ids'] = img_order_ids
+        out_dict['img_order_encoded'] = img_order_encoded
+        out_dict['obj_order_ids'] = torch.LongTensor(self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in self._generate_obj_ids_(list(set(img_order_ids_old)), self.n_boxes)]\
+            , add_special_tokens=False))
+        out_dict["task"] = example["task"]
         return out_dict
 
 
@@ -179,6 +306,8 @@ class COMETFineTuneDataset(Dataset):
             vis_attention_mask = torch.zeros(B, max_images_context, num_boxes, dtype=torch.float)
             # Use pad token for img_order ids padding. 
             img_order_ids = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
+            img_order_encoded = torch.ones(B, max_images_context, num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
+            obj_order_ids = torch.ones(B, max_images_context * num_boxes, dtype=torch.long) * self.tokenizer.pad_token_id
 
         for i, entry in enumerate(batch):
             input_ids[i, :len(entry['input_ids'])] = entry['input_ids']            
@@ -191,6 +320,8 @@ class COMETFineTuneDataset(Dataset):
                 boxes[i,:entry['boxes'].size(0)] += entry['boxes']
                 vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
                 img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']
+                img_order_encoded[i, :entry['img_order_ids'].size(0)] = entry['img_order_encoded']
+                obj_order_ids[i, :entry['obj_order_ids'].size(0)] = entry['obj_order_ids']
 
         word_mask = target_ids != self.tokenizer.pad_token_id
         target_ids[~word_mask] = -100
@@ -198,6 +329,7 @@ class COMETFineTuneDataset(Dataset):
         out_dict = {'input_ids': input_ids,
                 'target_ids': target_ids,
                 'examples': [elem['example'] for elem in batch],
+                "task": [elem['task'] for elem in batch]
                 }
     
         if not self.args.just_text_features:
@@ -207,65 +339,10 @@ class COMETFineTuneDataset(Dataset):
                 'img_order_ids': img_order_ids,
                 'input_ids': input_ids,
                 'target_ids': target_ids,
-                'examples': [elem['example'] for elem in batch]}
+                'img_order_encoded': img_order_encoded,
+                'examples': [elem['example'] for elem in batch],
+                "task": [elem['task'] for elem in batch],
+                'obj_order_ids':obj_order_ids}
     
         return out_dict
 
-class COMETEvaluator:
-    
-    def evaluate(self, predicts, examples, test_file, output_path):
-
-        test_file = test_file.replace('_gpt2', '')
-        correct_unknown, incorrect_unknown = 0, 0
-        # Recover global indexes
-        for i in range(len(predicts)):
-            orig_prediction = predicts[i]
-            cur_pred = predicts[i].replace(END_OF_API_CALL, '').replace(END_OF_SENTENCE, '')
-            for mapping in examples[i]['mapping']:
-                cur_pred = cur_pred.replace(f'mem_id_{mapping[1]}', f'{mapping[0]}')
-            # If there are still mem_ids in the pred but there were no mapping in context remove them. 
-            remaining = re.findall('(mem_id_[0-9]*)', cur_pred)
-            for to_remove in remaining:
-                if to_remove == 'mem_id_99':
-                    correct_unknown += 1
-                else:
-                    incorrect_unknown += 1
-                cur_pred = cur_pred.replace(to_remove, '')
-            examples[i]['model_prediction'] = cur_pred
-            examples[i]['original_prediction'] = orig_prediction
-        
-        
-        # Output the model predictions
-        json.dump(examples, open(os.path.join(output_path, 'predictions.json'), 'w'))
-        
-        # Call the evaluation scripts
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/create_results_json_memory.py \
-            --memory_test_json {test_file} --model_output_json {os.path.join(output_path, 'predictions.json')}")
-
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/response_evaluation_memory.py \
-        --data_json_path {test_file} --model_response_path {os.path.join(output_path, 'predictions_response_results.json')}")
-
-        os.system(f"python3 /data/home/jacampos/project/updated_vl/VL-T5/VL-T5/evaluation/evaluate_dst_memory.py \
-        --input_path_target {test_file} --input_path_predicted {os.path.join(output_path, 'predictions_dst_results.json')}\
-        --output_path_report {os.path.join(output_path, 'report.out')}")
-
-        try:
-            output_report = json.load(open(os.path.join(output_path, 'report.out'), 'r'))
-        except:
-            output_report = {}
-        print(f'The number of correct unknown is:{correct_unknown} and the incorrect amount: {incorrect_unknown} // Accuracy: {correct_unknown/(correct_unknown+incorrect_unknown)}')
-
-        return output_report
-        
-
-
-        
-        
-
-
-        
-            
-        
-        
-        
-        

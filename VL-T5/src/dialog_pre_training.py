@@ -2,7 +2,7 @@ import dist_utils
 from pprint import pformat
 import numpy as np
 from packaging import version
-from comet_data import COMETFineTuneDataset, COMETEvaluator
+from dialog_pre_training_data import DialPreFineTuneDataset
 import logging
 from tqdm import tqdm
 from pathlib import Path
@@ -20,6 +20,7 @@ from utils import get_memories_mappings
 from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 import h5py
+from dist_utils import reduce_dict
 
 
 from utils import load_state_dict, LossMeter, set_global_logging_level
@@ -49,22 +50,22 @@ class Trainer(TrainerBase):
         if not self.verbose:
             set_global_logging_level(logging.ERROR, ["transformers"])
 
-        from comet_model import VLT5COMET, VLBartCOMET
+        from dialog_pre_training_model import VLT5DialPre, VLBartDialPre
 
         self.wandb_initialized = False
         
         model_kwargs = {}
         if 't5' in args.backbone:
-            model_class = VLT5COMET
+            model_class = VLT5DialPre
         elif 'bart' in args.backbone:
-            model_class = VLBartCOMET
-        
+            model_class = VLBartDialPre
         config = self.create_config()
         self.tokenizer = self.create_tokenizer()
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] 
+                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1) ]
             special_tokens_dict = {
                 'additional_special_tokens': additional_special_tokens}
             num_added_toks = self.tokenizer.add_special_tokens(
@@ -72,18 +73,24 @@ class Trainer(TrainerBase):
 
             config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids(
                 [f'<vis_extra_id_{i}>' for i in range(100)])
-        
+
+        # Add COMET special tokens
+        comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
+        """
+        if 't5' in self.args.tokenizer:
+            self.tokenizer.add_tokens('<')
+        """
+        comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
+
         self.model = self.create_model(model_class, config, **model_kwargs)
 
         if 't5' in self.args.tokenizer:
-            self.model.resize_token_embeddings(self.tokenizer.vocab_size + num_added_toks)
+            self.model.resize_token_embeddings(self.model.shared.num_embeddings + num_added_toks + comet_added_tokens)
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(
-                self.model.model.shared.num_embeddings + num_added_toks)
-            if self.verbose:
-                print(f'Vocab resize: {self.tokenizer.vocab_size} -> {self.model.model.shared.num_embeddings}')
-                assert self.model.model.shared.weight is self.model.lm_head.weight
-                assert self.model.model.shared.weight is self.model.model.encoder.visual_embedding.obj_order_embedding.weight
+                self.model.model.shared.num_embeddings + num_added_toks + comet_added_tokens)
+
+        self.model.tokenizer = self.tokenizer
 
         # Load Checkpoint
         self.start_epoch = None
@@ -91,18 +98,6 @@ class Trainer(TrainerBase):
             ckpt_path = args.load + '.pth'
             self.load_checkpoint(ckpt_path)
 
-        # Add COMET special tokens
-        comet_special_tokens = json.load(open(args.special_tokens_path, 'r', encoding='utf-8'))
-        if 't5' in self.args.tokenizer:
-            self.tokenizer.add_tokens('<')
-            
-        comet_special_tokens['additional_special_tokens'] += [f'mem_id_{i}' for i in range(100-1, -1, -1)]
-        comet_added_tokens = self.tokenizer.add_special_tokens(comet_special_tokens)
-
-        self.model.resize_token_embeddings(len(self.tokenizer))
-
-        self.model.tokenizer = self.tokenizer
-        
         # GPU Options
         print(f'Model Launching at GPU {self.args.gpu}')
         if self.verbose:
@@ -112,7 +107,7 @@ class Trainer(TrainerBase):
 
         print('Building the train loader')
         train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
-        train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        train_dataset = DialPreFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer, args.randomization)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
                                       batch_size=args.batch_size,
@@ -123,7 +118,7 @@ class Trainer(TrainerBase):
     
         print('Building the val loader')
         val_raw_data = json.load(open(args.valid_path, 'r', encoding='utf-8'))
-        val_dataset = COMETFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
+        val_dataset = DialPreFineTuneDataset(val_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer, 'no_random')
         self.val_loader = DataLoader(val_dataset,
                                     batch_size=args.valid_batch_size,
                                     shuffle=False,
@@ -131,18 +126,6 @@ class Trainer(TrainerBase):
                                     pin_memory=True,
                                     sampler=None,
                                     collate_fn=val_dataset.collate_fn,
-                                    drop_last=False)
-
-        print('Building the test loader')
-        test_raw_data = json.load(open(args.test_path, 'r', encoding='utf-8'))
-        test_dataset = COMETFineTuneDataset(test_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer)
-        self.test_loader = DataLoader(test_dataset,
-                                    batch_size=args.valid_batch_size,
-                                    shuffle=False,
-                                    num_workers=args.num_workers,
-                                    pin_memory=True,
-                                    collate_fn=test_dataset.collate_fn,
-                                    sampler=None,
                                     drop_last=False)
         
         # Optimizer
@@ -164,30 +147,19 @@ class Trainer(TrainerBase):
             print(f'It took {time() - start:.1f}s')
 
         
-        # Initialize evaluator
-        self.evaluator = COMETEvaluator()
-            
     def train(self):
 
-        # If we just want to evalute
-        if self.args.do_test:
-            best_path = os.path.join(self.args.output, 'BEST')
-            self.load(best_path)
-
-            test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
-
-            return -1
-
+        LOSSES_NAME = self.args.LOSSES_NAME
         if self.verbose:
-            loss_meter = LossMeter()
+            loss_meters = [LossMeter() for _ in range(len(LOSSES_NAME))]
             best_valid = 0.
             best_epoch = 0
 
             if not self.wandb_initialized:
                 if 't5' in self.args.backbone:
-                    project_name = "VLT5_COMET"
+                    project_name = "VLT5_DialPre"
                 elif 'bart' in self.args.backbone:
-                    project_name = "VLBart_COMET"
+                    project_name = "VLBart_DialPre"
 
                 wandb.init(project=project_name)
                 wandb.run.name = self.args.run_name
@@ -215,12 +187,12 @@ class Trainer(TrainerBase):
             if self.args.distributed:
                 self.train_loader.sampler.set_epoch(epoch)
             if self.verbose:
-                pbar = tqdm(total=len(self.train_loader), ncols=120)
+                pbar = tqdm(total=len(self.train_loader), ncols=240)
 
-            epoch_results = {
-                'loss': 0.,
-
-            }
+            epoch_results = {}
+            for loss_name in LOSSES_NAME:
+                epoch_results[loss_name] = 0.
+                epoch_results[f'{loss_name}_count'] = 0
 
             for step_i, batch in enumerate(self.train_loader):
                 if self.args.fp16 and _use_native_amp:
@@ -283,10 +255,13 @@ class Trainer(TrainerBase):
                     for param in self.model.parameters():
                         param.grad = None
                     global_step += 1
-
+            
                 for k, v in results.items():
                     if k in epoch_results:
-                        epoch_results[k] += v.item()
+                        try:
+                            epoch_results[k] += v.item()
+                        except:
+                            epoch_results[k] += v
 
                 if self.lr_scheduler:
                     if version.parse(torch.__version__) >= version.parse("1.4"):
@@ -300,9 +275,16 @@ class Trainer(TrainerBase):
                         lr = self.args.lr
 
                 if self.verbose:
-                    loss_meter.update(loss.item())
-                    desc_str = f'Epoch {epoch} | LR {lr:.6f} | Steps {global_step}'
-                    desc_str += f' | Loss {loss_meter.val:4f}'
+                    desc_str = f'Epoch {epoch} | LR {lr:.6f} |'
+
+                    for i, (loss_name, loss_meter) in enumerate(zip(LOSSES_NAME, loss_meters)):
+
+                        if loss_name in results:
+                            loss_meter.update(results[f'{loss_name}'] / results[f'{loss_name}_count'])
+                        if len(loss_meter) > 0:
+                            loss_count = epoch_results[f'{loss_name}_count']
+                            desc_str += f' {loss_name} ({loss_count}) {loss_meter.val:.3f}'
+
                     pbar.set_description(desc_str)
                     pbar.update(1)
 
@@ -314,31 +296,36 @@ class Trainer(TrainerBase):
 
             # Validation
             valid_results = self.validate(self.val_loader)
-            valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
+            valid_results = reduce_dict(valid_results, average=False)
 
             if self.verbose:
-                valid_score = valid_results['loss']
+                valid_loss = valid_results['total_loss']
+                valid_loss_count = valid_results['total_loss_count']
 
-                if valid_score < best_valid or epoch == 0:
-                    best_valid = valid_score
+                avg_valid_loss = valid_loss / valid_loss_count
+                losses_str = f"Valid Loss: {avg_valid_loss:.3f}\n"
+
+                for name, loss in valid_results.items():
+                    if name[-4:] == 'loss':
+                        loss_count = int(valid_results[name+'_count'])
+                        if loss_count > 0:
+                            avg_loss = loss / loss_count
+                            losses_str += f"{name} ({loss_count}): {avg_loss:.3f} "
+                            wandb.log({f'Valid Loss/{name}': avg_loss}, step=epoch)
+
+                losses_str += '\n'
+                print(losses_str)
+
+                if avg_valid_loss < best_valid or epoch == 0:
+                    best_valid = avg_valid_loss
                     best_epoch = epoch
                     self.save("BEST")
 
                 log_str = ''
 
                 log_str += pformat(valid_results)
-                log_str += "\nEpoch %d: Valid loss %0.4f" % (epoch, valid_score)
+                log_str += "\nEpoch %d: Valid loss %0.4f" % (epoch, avg_valid_loss)
                 log_str += "\nEpoch %d: Best loss %0.4f\n" % (best_epoch, best_valid)
-
-                wandb_log_dict = {}
-                wandb_log_dict['Train/Loss'] = epoch_results['loss'] / len(self.train_loader)
-
-                for score_name, score in valid_results.items():
-                    wandb_log_dict[f'Valid/{score_name}'] = score
-
-                wandb_log_dict[f'Valid/best_epoch'] = best_epoch
-
-                wandb.log(wandb_log_dict, step=epoch)
 
                 print(log_str)
 
@@ -348,115 +335,38 @@ class Trainer(TrainerBase):
         if self.verbose:
             self.save("LAST")
 
-        # Test Set
-        best_path = os.path.join(self.args.output, 'BEST')
-        self.load(best_path)
-
-        if self.verbose:
-            wandb.save(best_path, base_path=self.args.output)
-            print(f'\nUploaded checkpoint {best_epoch}', best_path)
-
-        test_results = self.evaluate(self.test_loader, args.test_path, os.path.join(args.output, "test/"))
-
-        if self.verbose:
-            wandb_log_dict = {}
-            for score_name, score in test_results.items():
-                wandb_log_dict[f'Test/{score_name}'] = score
-            wandb.log(wandb_log_dict, step=epoch)
-
-            log_str = 'Test set results\n'
-            log_str += pformat(test_results)
-
-            print(log_str)
-
-        if self.args.distributed:
-            dist.barrier()
-
-
-    def predict(self, loader):
-        """
-        Predict the answers to questions in a data split.
-        :param eval_tuple: The data tuple to be evaluated.
-        :param dump: The path of saved file to dump results.
-        :return: A dict of question_id to answer.
-        """
-        self.model.eval()
-        with torch.no_grad():
-            predictions = []
-            examples = []
-
-            gen_kwargs = {}
-            gen_kwargs['num_beams'] = self.args.num_beams
-            gen_kwargs['max_length'] = self.args.gen_max_length
-
-            for i, batch in enumerate(tqdm(loader, ncols=120, desc="Prediction", disable=not self.verbose)):
-                if self.args.distributed:
-                    results = self.model.module.test_step(
-                        batch,
-                        **gen_kwargs)
-                else:
-                    results = self.model.test_step(
-                        batch,
-                        **gen_kwargs)
-
-                predictions.extend(results['pred'])
-
-                if 'examples' in batch:
-                    examples.extend(batch['examples'])
-            results = {
-                'predictions': predictions,
-                'examples': examples
-            }
-
-            if self.args.distributed:
-                dist.barrier()
-                dist_results = dist_utils.all_gather(results)
-                predictions = []
-                examples = []
-                for result in dist_results:
-                    predictions.extend(result['predictions'])
-                    examples.extend(result['examples'])
-                results = {
-                    'predictions': predictions,
-                    'examples': examples
-                }
-            return results
 
     def validate(self, loader):
+
+        LOSSES_NAME = self.args.LOSSES_NAME
+
+        epoch_results = {}
+        for loss_name in LOSSES_NAME:
+            epoch_results[loss_name] = 0.
+            epoch_results[f'{loss_name}_count'] = 0
+
         self.model.eval()
         with torch.no_grad():
             losses = []
-            for i, batch in enumerate(tqdm(loader, ncols=120, desc="Prediction", disable=not self.verbose)):
+            for i, batch in enumerate(tqdm(loader, ncols=240, desc="Prediction", disable=not self.verbose)):
                 if self.args.distributed:
                     results = self.model.module.valid_step(batch)
                 else:
                     results = self.model.valid_step(batch)
-                losses.extend(results['loss'])
 
-            results = {'loss': losses}
+                for k, v in results.items():
+                    if k in epoch_results:
+                        if isinstance(v, int):
+                            epoch_results[k] += v
+                        elif isinstance(v, torch.Tensor):
+                            epoch_results[k] += v.item()
+                            
             
             if self.args.distributed:
                 dist.barrier()
-                dist_results = dist_utils.all_gather(results)
-                losses = []
-                for result in dist_results:
-                    losses.extend(result['loss'])
-            results = {
-                'loss': np.mean(losses),
-            }
-            return results
+
+        return epoch_results
         
-    def evaluate(self, loader, gt_path, output_path):
-
-        results = self.predict(loader)
-
-        predictions = results['predictions']
-        print('# predictions:', len(predictions))
-        examples = results['examples']
-        evaluator = self.evaluator
-        eval_results = evaluator.evaluate(predictions, examples, gt_path, output_path)
-        return eval_results
-
         
 def main(gpu, args):
 
@@ -485,6 +395,13 @@ if __name__ == '__main__':
     args = parse_args()
     ngpus_per_node = torch.cuda.device_count()
     args.world_size = ngpus_per_node
+
+    LOSSES_NAME = [f'{name}_loss' for name in args.dialog_losses.split(',')]
+    if args.local_rank in [0, -1]:
+        print(LOSSES_NAME)
+    LOSSES_NAME.append('total_loss') # total loss
+
+    args.LOSSES_NAME = LOSSES_NAME
 
     if args.local_rank in [0, -1]:
         print(args)

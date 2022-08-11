@@ -189,6 +189,10 @@ def parse_args(parse=True, **optional_kwargs):
     # SIMMC
     parser.add_argument("--features_path")
 
+    # Dialog pre fine tunning
+    parser.add_argument("--dialog_losses", default='coherence,speaker,reordering,entities,mm_coherence,mm_reordering', type=str)
+    parser.add_argument("--use_entity_types", action='store_true')
+
     # Etc.
     parser.add_argument('--comment', type=str, default='')
     parser.add_argument("--dry", action='store_true')
