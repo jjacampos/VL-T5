@@ -31,7 +31,7 @@ _use_apex = False
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
-    from transormers.file_utils import is_apex_available
+    from transformers.file_utils import is_apex_available
     if is_apex_available():
         from apex import amp
     _use_apex = True
@@ -63,7 +63,7 @@ class Trainer(TrainerBase):
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<vis_extra_id_{i}>' for i in range(300-1, -1, -1)] + \
                 [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1) ]
             special_tokens_dict = {
                 'additional_special_tokens': additional_special_tokens}
@@ -107,6 +107,7 @@ class Trainer(TrainerBase):
         print('Building the train loader')
         train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
         train_dataset = COMETFineTuneDataset(train_raw_data, memories_to_coco_ids, coco_features, args, self.tokenizer, args.randomization)
+        train_dataset.__getitem__(5)        
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
                                       batch_size=args.batch_size,
@@ -215,7 +216,7 @@ class Trainer(TrainerBase):
 
             for step_i, batch in enumerate(self.train_loader):
                 if self.args.fp16 and _use_native_amp:
-                    with autocast():
+                    with autocast(dtype=torch.bfloat16):                    
                         if self.args.distributed:
                             results = self.model.module.train_step(batch)
                         else:
@@ -305,7 +306,8 @@ class Trainer(TrainerBase):
 
             # Validation
             valid_results = self.validate(self.val_loader)
-            valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
+            if self.args.optimize_ja:
+                valid_metrics = self.evaluate(self.val_loader, args.valid_path, os.path.join(args.output, 'valid/'))
 
             if self.verbose:
                 if self.args.optimize_ja:

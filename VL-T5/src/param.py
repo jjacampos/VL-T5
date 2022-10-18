@@ -154,7 +154,6 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--RefCOCO_GT', action='store_true')
     parser.add_argument('--RefCOCO_BUTD', action='store_true')
     parser.add_argument("--shuffle_boxes", action='store_true')
-    parser.add_argument('--vis_pointer', type=str2bool, default=False)
 
     # Multitask
     parser.add_argument("--multitask_sampling", type=str, default='roundrobin')
@@ -186,6 +185,7 @@ def parse_args(parse=True, **optional_kwargs):
     # Multi image pre training
     parser.add_argument('--max_context', type=int, default=4)
     parser.add_argument('--checkpoint_after', type=int, default=5000)
+    parser.add_argument('--multi_image_pretrain', action='store_true')
 
     # SIMMC
     parser.add_argument("--features_path")

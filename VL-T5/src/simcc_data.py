@@ -41,60 +41,52 @@ class SIMMCFineTuneDataset(Dataset):
     def __len__(self):
         return len(self.raw_dataset)
 
-    def _get_image_features(self, scene_ids):
-        
-        # Get image features
-        feats_list = []
-        boxes_list = []
-
-        for (turn, scene) in scene_ids.items():
-            # Scene has "m_" at begining that we don't match with 
-            scene_data = self.features[scene[2:]]            
-            feats = np.zeros(shape=(self.n_boxes, self.feat_dim), dtype=np.float32)
+    def _get_image_features(self, scene_ids, obj_ids):
+        # Make sure that the obj_ids are added as features
+        objs = []
+        feats = np.zeros(shape=(len(scene_ids), self.n_boxes, self.feat_dim), dtype=np.float32)
+        boxes = np.zeros(shape=(len(scene_ids), self.n_boxes, 4), dtype=np.float32)
+        for index, (turn, scene) in enumerate(scene_ids.items()):
+            # Ensure that mentioned objects features are added
+            scene_data = self.features[scene]  
+            indexes = []
+            for obj in obj_ids:
+                try:
+                    indexes.append(scene_data['indexes'].index(obj))
+                    objs.append(obj)
+                except:
+                    continue
+            n_boxes, _ = scene_data['roi_features'].shape
             # Get the top n_boxes taking prob into account
-            indexes = (-self.coco_features[f'{img_id}/attr_conf'][()]).argsort()[:self.n_boxes]
-            feats = self.coco_features[f'{img_id}/features'][()][indexes]
-            #self.coco_features[f'{img_id}/features'][()][indexes].read_direct(feats)
-            feats_list.append(feats)
-            # CONTINUE FROM HERE
+            indexes_sorted = (-scene_data["attr_probs"]).argsort()       
+            for cur_index in indexes_sorted:
+                if not cur_index in indexes:
+                    indexes.append(int(cur_index))
+                    objs.append(int(scene_data['indexes'][cur_index]))
+                if len(indexes) >= self.args.n_boxes:
+                    break
+            if len(objs) % self.n_boxes != 0:
+                for i in range(self.n_boxes * (index+1) - len(objs)):
+                    objs.append(-1)
+
+            feats[index][:n_boxes] += np.array(scene_data["roi_features"][indexes])
             # BBoxes
-            img_h = self.coco_features[f'{img_id}/img_h'][()]
-            img_w = self.coco_features[f'{img_id}/img_w'][()]
-            boxes = self.coco_features[f'{img_id}/boxes'][()][indexes]  # (x1, y1, x2, y2)
-            boxes[:, (0, 2)] /= img_w
-            boxes[:, (1, 3)] /= img_h
+            boxes[index][:n_boxes] = np.array(scene_data["normalized_boxes"].squeeze()[indexes])  # (x1, y1, x2, y2)
             np.testing.assert_array_less(boxes, 1+1e-5)
             np.testing.assert_array_less(-boxes, 0+1e-5)
-            boxes_list.append(boxes)
 
-        if len(feats_list) == 0:
-            # Add one zeros image for the case in which we don't have context memories
-            feats = np.zeros(shape=(self.n_boxes, self.feat_dim), dtype=np.float32)
-            feats_list.append(feats)
-            # BBoxes
-            boxes = np.zeros(shape=(self.n_boxes, 4))
-            boxes_list.append(boxes)
-            
-        feats = np.stack(feats_list) # [len(memory_ids), n_boxes, feat_dim]
         feats = torch.from_numpy(feats)
-        boxes = np.stack(boxes_list)
         boxes = torch.from_numpy(boxes)
         boxes.clamp_(min=0.0, max=1.0)
 
-        return feats, boxes
+        return feats, boxes, objs
 
-    def _generate_obj_ids_(self, img_ids, nboxes):
-        obj_ids = []
-        for img_id in img_ids:
-            for i in range(nboxes):
-                obj_ids.append(img_id * nboxes + i)
+    def _generate_obj_ids_(self, objs, obj_mapping):
+        obj_ids = [obj_mapping[obj] for obj in objs]
         return obj_ids
-
 
     # TODO many things can be moved to initialization
     def __getitem__(self, idx):
-        import pdb
-        pdb.set_trace()
         example = self.raw_dataset[idx]
 
         # Get the text features 
@@ -107,52 +99,53 @@ class SIMMCFineTuneDataset(Dataset):
 
         # We want memories in inverse order to ensure that last ones are added as features. 
         for element in re.findall(f'<SOM>([^<]*)<EOM>', input_sentence)[::-1]:
-            split_objects = element.strip().split(',')
-            for object in split_objects:
-                obj_ids.append(int(object))
+            try:
+                obj_ids += [int(object) for object in element.strip().split(',')]
+            except:
+                print(element, input_sentence)
+                
         out_dict = {}
         # Get the memory features
         if not self.args.just_text_features:
-            feats, boxes = self._get_image_features(scene_ids)
+            feats, boxes, objs = self._get_image_features(scene_ids, obj_ids)
             out_dict = {'boxes':boxes,
                     'vis_feats': feats}
 
-        # Get the img_order_ids
-        img_order_ids = []
-        for i in range(min(self.max_images, len(memory_ids))):
-            img_order_ids += [order[i]] * self.n_boxes
+        obj_mapping = {element: index for index, element in enumerate(list(set(objs)))}
 
+        img_order_ids = []
+        for i in range(len(scene_ids)):
+            img_order_ids += [i] * self.n_boxes
         # Add one padding if we don't have memories in context
         if len(img_order_ids) == 0:
             img_order_ids += [self.tokenizer.pad_token_id] * self.n_boxes
-        img_order_ids_old = img_order_ids
         img_order_encoded = self.tokenizer.encode([f'<img_extra_id_{index}>' for index in img_order_ids], add_special_tokens=False)
-        img_order_ids = torch.LongTensor(img_order_ids).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
-        img_order_encoded = torch.LongTensor(img_order_encoded).view(max(1, min(self.max_images, len(memory_ids))), self.n_boxes)
+        img_order_ids = torch.LongTensor(img_order_ids).view(len(scene_ids), self.n_boxes)
+        img_order_encoded = torch.LongTensor(img_order_encoded).view(len(scene_ids), self.n_boxes)
 
         # Use local context for image ids
-        for index, memory in enumerate(memory_ids[:self.max_images]):
-            input_sentence = input_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
-            target_sentence = target_sentence.replace(f'{memory}', f' <img_extra_id_{order[index]}> ')
+        for (obj, index) in obj_mapping.items():
+            input_sentence = input_sentence.replace(f'{obj}', f' <vis_extra_id_{index}> ', 1)
+            target_sentence = target_sentence.replace(f'{obj}', f' <vis_extra_id_{index}> ', 1)
 
         # If the target memory is not in the context just use mem_id_99 as unknown for consistency
-        for memory in re.findall(f'(\d+)', target_sentence):
-            if int(memory) in self.coco_mapping:
-                target_sentence = target_sentence.replace(f'{memory}', ' <img_extra_id_99> ')
+        for obj in re.findall(f'<SOM>([^<]*)<EOM>', target_sentence):
+            if obj.isdigit():
+                target_sentence = target_sentence.replace(f'{obj}', ' <vis_extra_id_99> ')
         
         # TODO use different tokens for API and normal generation now just using "simmc" as input
-        input_ids = self.tokenizer.encode(f'simmc: {input_sentence}', \
+        input_ids = self.tokenizer.encode(f'simmc dialogue context: {input_sentence}', \
             max_length=self.args.max_text_length, truncation=True)
         out_dict['input_ids'] = torch.LongTensor(input_ids)
 
         target_ids = self.tokenizer.encode(target_sentence)
         out_dict['target_ids'] = torch.LongTensor(target_ids)
         # Get the mapping back from id to memory        
-        example['mapping'] = [(memory, idx) for memory, idx in zip(memory_ids, order)]
+        example['mapping'] = obj_mapping
         out_dict['example'] = example
         out_dict['img_order_ids'] = img_order_ids
         out_dict['img_order_encoded'] = img_order_encoded
-        out_dict['obj_order_ids'] = torch.LongTensor(self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in self._generate_obj_ids_(list(set(img_order_ids_old)), self.n_boxes)]\
+        out_dict['obj_order_ids'] = torch.LongTensor(self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in self._generate_obj_ids_(objs, obj_mapping)]\
             , add_special_tokens=False))
         return out_dict
 
@@ -185,7 +178,7 @@ class SIMMCFineTuneDataset(Dataset):
             if not self.args.just_text_features:
                 # If the amount of context images is greater than one
                 if not(entry['boxes'].size(0) == 1 and torch.all(entry['boxes']==0)):
-                    vis_attention_mask[i,:entry['boxes'].size(0)] = 1
+                    vis_attention_mask[i,:] = (entry['vis_feats']!=0)
                 boxes[i,:entry['boxes'].size(0)] += entry['boxes']
                 vis_feats[i,:entry['vis_feats'].size(0)] += entry['vis_feats']
                 img_order_ids[i, :entry['img_order_ids'].size(0)] = entry['img_order_ids']

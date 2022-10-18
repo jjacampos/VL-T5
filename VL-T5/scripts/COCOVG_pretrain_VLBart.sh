@@ -18,7 +18,6 @@ python -m torch.distributed.launch \
         --clip_grad_norm 1.0 \
         --losses 'lm,qa,ground_caption,refer,itm' \
         --backbone 'facebook/bart-base' \
-        --individual_vis_layer_norm False \
         --output $output ${@:2} \
         --epoch 30 \
         --wordMaskRate 0.30 \

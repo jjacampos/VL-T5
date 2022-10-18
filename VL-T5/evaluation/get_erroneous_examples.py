@@ -9,7 +9,7 @@ import argparse
 import json
 import copy
 import numpy as np
-import random
+
 
 def reformat_turn_intents(turn_intents, ground_truth_act=None):
     new_intents = []
@@ -49,6 +49,7 @@ def reformat_turn_intents(turn_intents, ground_truth_act=None):
 
         new_intents.append(frame_intent)
     return new_intents
+
 
 def evaluate_from_json(d_true, d_pred):
     """
@@ -103,7 +104,7 @@ def evaluate_from_json(d_true, d_pred):
     return evaluate_from_flat_list(d_true_flattened, d_pred_flattened)
 
 
-def evaluate_from_json_conservative(d_true, d_pred, lowercase=False, strict=False, just_mm=False, just_num_references=False):
+def evaluate_from_json_conservative(d_true, d_pred, lowercase=False):
     """
         <list>d_true and <list>d_pred are in the following format:
         (Equivalent to "dialogue_data" field in the input data JSON file)
@@ -158,46 +159,28 @@ def evaluate_from_json_conservative(d_true, d_pred, lowercase=False, strict=Fals
                 print(f"Missing: {dialogue_idx} {turn_id}")
                 num_absent += 1
                 continue
-
-            if just_mm:
-                to_avoid = ["first", "second", "third", "fourth", "this", "share it", "was it", "here", "last"]
-                if dialog_true[turn_id]['goal_type']=="GoalType.SHARE" or dialog_true[turn_id]['goal_type']=="GoalType.GET_RELATED" \
-                    or dialog_true[turn_id]['goal_type']=="GoalType.GET_INFO":
-                    for special_token in to_avoid:
-                        if special_token in dialog_true[turn_id]['transcript'].lower():
-                            num_absent += 1
-                            print(f"Not multimodal: {dialog_true[turn_id]['transcript']}")
-                            continue
-                else:
-                    num_absent += 1
-                    continue                   
-
-            if just_num_references:
-                to_take_into_account = ["first", "second", "third", "fourth", "last"]
-                if dialog_true[turn_id]['goal_type']=="GoalType.SHARE" or dialog_true[turn_id]['goal_type']=="GoalType.GET_RELATED" \
-                    or dialog_true[turn_id]['goal_type']=="GoalType.GET_INFO":
-                    found = False
-                    for special_token in to_take_into_account:
-                        if special_token in dialog_true[turn_id]['transcript'].lower():
-                            found = True
-                    if not found:
-                        num_absent += 1
-                        print(f"Not numerical: {dialog_true[turn_id]['transcript']}")
-                        continue       
-                else:
-                    num_absent += 1
-                    continue                  
-
             num_present += 1
 
             turn_true = dialog_true[turn_id]['transcript_annotated']
             turn_pred = dialog_pred[turn_id]['transcript_annotated']
-
+            
             # API calls are formatted as acts.
             reformatted_act = dialog_true[turn_id]["api_call"]["call_type"]
             turn_true = reformat_turn_intents(turn_true, reformatted_act)
             turn_pred = reformat_turn_intents(turn_pred)
 
+            # try:
+            #     print(turn_pred[0]["act"])
+            #     num_present += 1
+            # except:
+            #     print(turn_pred)
+            #     num_absent += 1
+                # import pdb; pdb.set_trace(n
+            # import pdb; pdb.set_trace()
+            # Rename "act" in each frame to API_CALL for memories.
+
+            # turn_true['turn_idx'] = j
+            # turn_true['dialogue_idx'] = dialogue_idx
             d_true_flattened.append(turn_true)
             d_pred_flattened.append(turn_pred)
 
@@ -205,11 +188,11 @@ def evaluate_from_json_conservative(d_true, d_pred, lowercase=False, strict=Fals
     # print(len(d_pred_flattened))
     print(f"# present: {num_present} # absent: {num_absent}")
     return evaluate_from_flat_list(
-        d_true_flattened, d_pred_flattened, lowercase=lowercase, strict=strict
-    )
+        d_true_flattened, d_pred_flattened, lowercase=lowercase
+    ), d_true_flattened, d_pred_flattened
 
 
-def evaluate_from_flat_list(d_true, d_pred, lowercase=False, strict=False):
+def evaluate_from_flat_list(d_true, d_pred, lowercase=False):
     """
         <list>d_true and <list>d_pred are in the following format:
         (Each element represents a single turn, with (multiple) frames)
@@ -218,7 +201,7 @@ def evaluate_from_flat_list(d_true, d_pred, lowercase=False, strict=False):
                 {
                     'act': <str>,
                     'slots': [
-                        [
+                        [f
                             SLOT_NAME, SLOT_VALUE
                         ], ...
                     ]
@@ -232,11 +215,16 @@ def evaluate_from_flat_list(d_true, d_pred, lowercase=False, strict=False):
     """
     c = initialize_count_dict()
 
+    erroneous_indexes = []
+
+    
     # Count # corrects & # wrongs
     for i in range(len(d_true)):
         true_turn = d_true[i]
         pred_turn = d_pred[i]
-        turn_evaluation = evaluate_turn(true_turn, pred_turn, lowercase=lowercase, strict=strict)
+        turn_evaluation, erroneous_turn = evaluate_turn(true_turn, pred_turn, lowercase=lowercase)
+        if erroneous_turn:
+            erroneous_indexes.append(i)
 
         c = add_dicts(c, turn_evaluation)
 
@@ -295,12 +283,12 @@ def evaluate_from_flat_list(d_true, d_pred, lowercase=False, strict=False):
         'object_prec': object_prec,
         'object_f1': object_f1,
         'object_f1_stderr': object_f1_stderr,        
-    }
+    }, erroneous_indexes
 
 
-def evaluate_turn(true_turn, pred_turn, lowercase=False, strict=False):
+def evaluate_turn(true_turn, pred_turn, lowercase=False):
     count_dict = initialize_count_dict()
-
+    erroneous_turn = False
     # Must preserve order in which frames appear.
     for frame_idx in range(len(true_turn)):
         # For each frame
@@ -310,17 +298,19 @@ def evaluate_turn(true_turn, pred_turn, lowercase=False, strict=False):
         else:
             pred_frame = pred_turn[frame_idx]
 
+        count_dict_lag, erroneous = evaluate_frame(
+                true_frame, pred_frame, strict=False, lowercase=lowercase
+            )
         count_dict = add_dicts(
             count_dict,
-            evaluate_frame(
-                true_frame, pred_frame, lowercase=lowercase, strict=strict
-            )
+            count_dict_lag
         )
+        if erroneous:
+            erroneous_turn = True
+    return count_dict, erroneous_turn
 
-    return count_dict
 
-
-def evaluate_frame(true_frame, pred_frame, lowercase=False, strict=False,):
+def evaluate_frame(true_frame, pred_frame, strict=True, lowercase=False):
     """
         If strict=True,
             For each dialog_act (frame), set(slot values) must match.
@@ -329,6 +319,9 @@ def evaluate_frame(true_frame, pred_frame, lowercase=False, strict=False,):
     count_dict = initialize_count_dict()
     count_dict['n_frames'] += 1
 
+
+
+    erroneous = False
     # Compare Dialog Actss
     true_act = true_frame['act'] if 'act' in true_frame else None
     pred_act = pred_frame['act'] if 'act' in pred_frame else None
@@ -341,6 +334,12 @@ def evaluate_frame(true_frame, pred_frame, lowercase=False, strict=False,):
     count_dict['n_true_acts'] += 'act' in true_frame
     count_dict['n_pred_acts'] += 'act' in pred_frame
 
+    """""
+    if len(pred_frame['slots']) > 0 and "[" in pred_frame['slots'][0][1]:
+        import pdb
+        pdb.set_trace()
+    """
+
     # Compare Slots
     if not lowercase:
         true_frame_slot_values = {f'{k}={v}' for k, v in true_frame.get('slots', [])}
@@ -352,6 +351,7 @@ def evaluate_frame(true_frame, pred_frame, lowercase=False, strict=False,):
         pred_frame_slot_values = {
             f'{k}={v}'.lower() for k, v in pred_frame.get('slots', [])
         }
+
 
     count_dict['n_true_slots'] += len(true_frame_slot_values)
     count_dict['n_pred_slots'] += len(pred_frame_slot_values)
@@ -408,7 +408,11 @@ def evaluate_frame(true_frame, pred_frame, lowercase=False, strict=False,):
             true_frame_request_slot_values == pred_frame_request_slot_values and \
             true_frame_object_values == pred_frame_object_values)
 
-    return count_dict
+    if not b_correct_act or not true_frame_slot_values == pred_frame_slot_values or not true_frame_request_slot_values == pred_frame_request_slot_values \
+        or not true_frame_object_values == pred_frame_object_values:
+        erroneous = True
+
+    return count_dict, erroneous
 
 
 def add_dicts(d1, d2):
@@ -474,7 +478,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_path_target',
                         help='path for target (.json)')
-    parser.add_argument('--input_path_predicted',
+    parser.add_argument('--input_path_predicted',   
+                        default=[],
+                        required=False,
+                        nargs="+",  
                         help='path for model prediction output (.json)')
     parser.add_argument('--output_path_report',
                         help='path for saving evaluation summary (.json)')
@@ -485,51 +492,64 @@ if __name__ == '__main__':
         help="Evaluate a lowercase model"
     )
 
-    parser.add_argument(
-        "--do_strict",
-        action="store_true",
-        default=False,
-        help="Do strict evaluation"
-    )
-    
-    parser.add_argument(
-        "--just_mm",
-        action="store_true",
-        default=False,
-        help="Use regex for detecting mm cases"
-    )
-
-    parser.add_argument(
-        "--just_num_references",
-        action="store_true",
-        default=False,
-        help="Evaluate just the numerical reference cases"
-    )
-
-
     args = parser.parse_args()
     input_path_target = args.input_path_target
-    input_path_predicted = args.input_path_predicted
+    input_paths_predicted = args.input_path_predicted
     output_path_report = args.output_path_report
 
     # Read the JSON file input
     # json_predicted must have the same structure as the original input JSON
     # e.g. {'dialogue_data': [ ... ]}
-    json_target = json.load(open(input_path_target, 'r'))
-    json_predicted = json.load(open(input_path_predicted, 'r'))
+    all_erroneous = []
+    predicted = []
+    true_examples = []
+    json_target = json.load(open(input_path_target, 'r'))    
+    for input_path_predicted in input_paths_predicted:
+        json_predicted = json.load(open(input_path_predicted, 'r'))
 
-    # Evaluate
-    report = evaluate_from_json_conservative(
-        json_target['dialogue_data'],
-        json_predicted['dialogue_data'],
-        lowercase=args.lowercase,
-        strict=args.do_strict, 
-        just_mm=args.just_mm,
-        just_num_references=args.just_num_references
-    )
-    # report = evaluate_from_json(json_target['dialogue_data'], json_predicted['dialogue_data'])
-    print(report)
+        # Evaluate
+        (report, erroneous_indexes), true_examples, pred_examples = evaluate_from_json_conservative(
+            json_target['dialogue_data'],
+            json_predicted['dialogue_data'],
+            lowercase=args.lowercase,
+        )
+        predicted.append(pred_examples)
+        # report = evaluate_from_json(json_target['dialogue_data'], json_predicted['dialogue_data'])
+        print(report)
+        all_erroneous.append(erroneous_indexes)
 
-    # Save report
-    with open(output_path_report, 'w') as f_out:
-        json.dump(report, f_out)
+    union_of_erroneous = set(all_erroneous[0])
+    differences = set(all_erroneous[0])
+    for erroneous in all_erroneous[1:]:
+        union_of_erroneous = union_of_erroneous & set(erroneous)
+        differences = differences.difference(erroneous)
+    print(len(union_of_erroneous))
+    print(differences)
+
+    # See errors
+    with open(output_path_report, 'w') as f_out:    
+        for index in union_of_erroneous:
+            f_out.write(f'---------------')            
+            # del true_examples[index][0]['uttr']
+            f_out.write(f'Correct output: {true_examples[index][0]["uttr"]}\n')
+            del true_examples[index][0]['uttr']
+            f_out.write(f'{true_examples[index][0]}\n')
+            for pred,input_path_predicted in zip(predicted, input_paths_predicted):
+                json_predicted = json.load(open(input_path_predicted, 'r'))
+                f_out.write(f'Erroneous in {input_path_predicted}: \n{pred[index]}\n')
+
+    with open(output_path_report + 'differences', 'w') as f_out:    
+        for index in differences:
+            f_out.write(f'---------------')            
+            # del true_examples[index][0]['uttr']
+            f_out.write(f'Correct output: {true_examples[index][0]["uttr"]}\n')
+            del true_examples[index][0]['uttr']
+            f_out.write(f'{true_examples[index][0]}\n')
+            for pred,input_path_predicted in zip(predicted, input_paths_predicted):
+                json_predicted = json.load(open(input_path_predicted, 'r'))
+                f_out.write(f'Erroneous in {input_path_predicted}: \n{pred[index]}\n')
+
+
+                                
+
+

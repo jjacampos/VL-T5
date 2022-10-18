@@ -11,7 +11,7 @@ python -m torch.distributed.launch \
         --train_path /fsx/jacampos/data/simmc2/data/simmc_dials_gpt2_train.json \
         --valid_path  /fsx/jacampos/data/simmc2/data/sim_dials_gpt2_dev.json \
         --test_path /fsx/jacampos/data/simmc2/data/sim_dials_gpt2_test_for_challenge.json\
-	--features_path /fsx/jacampos/data/simmc2/data/all_features.pickle \
+	--features_path /fsx/jacampos/data/simmc2/data/simmc_features.h5py \
 	--special_tokens_path /fsx/jacampos/data/simmc2/data/simmc_dials_gpt2_special_tokens.json \
 	--do_train \
         --optim adamw \

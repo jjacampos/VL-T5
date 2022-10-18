@@ -59,21 +59,8 @@ class DialPreFineTuneDataset(Dataset):
             all_user_entities.append(datum["entities"][0::2])
             all_system_entities.append(datum["entities"][1::2])
 
-        if "speaker" in self.losses:
-            for user_utterance in all_user_utterances:
-                new_dataset.append({
-                    'predict': f"speaker: {user_utterance.replace('<USER>', '').strip()}",
-                    'target': '<USER>',
-                    'task': 'speaker'})
-            for system_utterance in all_system_utterances:
-                # We don't want memories to appear in this task because it would be trivial for the system
-                new_dataset.append({
-                    'predict': f"speaker: {system_utterance.replace('<SYSTEM>', '').split('<SOM>')[0].strip()}",
-                    'target': '<SYSTEM>',
-                    'task': 'speaker'}) 
-
-
         for datum in self.raw_dataset:
+            current_loss = random.sample(self.losses, 1)[0]
             input_sentence = datum['predict']
             current_user_sentences = [f"<USER> {elem}".strip() for elem in re.findall(f'<USER>(.*?)<SYSTEM>', input_sentence)]
             current_system_sentences = [f"<SYSTEM> {elem[0]}".strip() for elem in re.findall(f'<SYSTEM>(.*?)(<USER>|<EOS>)', input_sentence)]
@@ -85,7 +72,20 @@ class DialPreFineTuneDataset(Dataset):
             dialog = " ".join(current_sentences)
             dialog_len = len(current_sentences)
 
-            if "coherence" in self.losses:
+            if "speaker" == current_loss:
+                for user_utterance in current_user_sentences:
+                    new_dataset.append({
+                        'predict': f"speaker: {user_utterance.replace('<USER>', '').strip()}",
+                        'target': '<USER>',
+                        'task': 'speaker'})
+                for system_utterance in current_system_sentences:
+                    # We don't want memories to appear in this task because it would be trivial for the system
+                    new_dataset.append({
+                        'predict': f"speaker: {system_utterance.replace('<SYSTEM>', '').split('<SOM>')[0].strip()}",
+                        'target': '<SYSTEM>',
+                        'task': 'speaker'}) 
+
+            if "coherence" == current_loss:
                 input_sentence = datum['predict']
                 if random.uniform(0,1) > 0.5:
                     utterances_to_modify = random.sample(range(0, dialog_len), random.randint(1, dialog_len))
@@ -108,7 +108,7 @@ class DialPreFineTuneDataset(Dataset):
                     'task': 'coherence'
                     })      
 
-            if "reordering" in self.losses:
+            if "reordering" == current_loss:
                 shuffled_sentences = random.sample(current_sentences, len(current_sentences))
                 original_input = dialog
                 shuffled_target = " ".join(shuffled_sentences)
@@ -117,7 +117,7 @@ class DialPreFineTuneDataset(Dataset):
                     'target': original_input,
                     'task': 'reordering'})
 
-            if "entities" in self.losses:
+            if "entities" == current_loss:
                 for sentence, entities in zip(current_sentences, datum['entities']):
                     if len(entities) == 0:
                         continue
@@ -127,7 +127,7 @@ class DialPreFineTuneDataset(Dataset):
                         'task': 'entities'}
                         )
 
-            if "mm_coherence" in self.losses and len(current_memories) > 0:
+            if "mm_coherence" == current_loss and len(current_memories) > 0:
                 if random.uniform(0,1) > 0.5:
                     memories_to_modify = random.sample(range(0, len(current_memories)), random.randint(1, len(current_memories)))
                     input_example = copy.deepcopy(dialog)
@@ -143,7 +143,7 @@ class DialPreFineTuneDataset(Dataset):
                     'task': 'mm_coherence'
                     })  
 
-            if "mm_reordering" in self.losses and len(current_memories) > 0:
+            if "mm_reordering" == current_loss and len(current_memories) > 0:
                 shuffled_memories = random.sample(current_memories, len(current_memories))
                 input_example = copy.deepcopy(dialog)
                 for orig_memory, shuffled_memory in zip(current_memories, shuffled_memories):

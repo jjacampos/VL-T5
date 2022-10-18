@@ -64,7 +64,7 @@ class Trainer(TrainerBase):
             special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
             num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
 
-            config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids([f'<vis_extra_id_{i}>' for i in range(100)])
+            config.default_obj_order_ids = self.tokenizer.convert_tokens_to_ids([f'<vis_extra_id_{i}>' for i in range(300)])
 
         self.model = self.create_model(model_class, config, **model_kwargs)
 

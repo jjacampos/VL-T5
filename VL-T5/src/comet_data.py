@@ -95,7 +95,6 @@ class COMETFineTuneDataset(Dataset):
 
     # TODO many things can be moved to initialization
     def __getitem__(self, idx):
-
         example = self.raw_dataset[idx]
 
         # Get the text features 
@@ -156,7 +155,7 @@ class COMETFineTuneDataset(Dataset):
                 target_sentence = target_sentence.replace(f'{memory}', ' <img_extra_id_99> ')
         
         # TODO use different tokens for API and normal generation now just using "comet" as input
-        input_ids = self.tokenizer.encode(f'comet: {input_sentence}', \
+        input_ids = self.tokenizer.encode(f'comet dialog context: {input_sentence}', \
             max_length=self.args.max_text_length, truncation=True)
         out_dict['input_ids'] = torch.LongTensor(input_ids)
 
@@ -232,7 +231,7 @@ class COMETEvaluator:
     
     def evaluate(self, predicts, examples, test_file, output_path):
 
-        test_file = os.path.join("/fsx/jacampos/data/comet/split_v2/", test_file.replace('_gpt2', '').split('/')[-1])
+        test_file = test_file.replace('_gpt2', '')
         #test_file = test_file.replace('_just_mm', '')
         correct_unknown, incorrect_unknown = 0, 0
         # Recover global indexes

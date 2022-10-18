@@ -82,6 +82,7 @@ class TrainerBase(object):
         config.use_vis_layer_norm = args.use_vis_layer_norm
         config.individual_vis_layer_norm = args.individual_vis_layer_norm
         config.losses = args.losses
+        config.dial_losses = args.dialog_losses
 
         config.share_vis_lang_layer_norm = args.share_vis_lang_layer_norm
         config.classifier = args.classifier
@@ -92,7 +93,7 @@ class TrainerBase(object):
         config.match_text_image = args.match_text_image
         config.just_text_model = args.just_text_model
 
-        config.multi_image_pretrain = True if '/fsx/jacampos/experiments/pretraining' in self.args.load else False
+        config.multi_image_pretrain = args.multi_image_pretrain
 
         return config
 
@@ -187,12 +188,11 @@ class TrainerBase(object):
                 state_dict[new_key] = state_dict.pop(key)
         # Small hack for loading when mismatch of image embeddings shapes or word embeddings
         if 't5' in self.args.backbone:   
-            n_embeds, dim = state_dict['shared.weight'].shape     
-            """
-            state_dict['encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.img_order_embedding.weight'], \
-                self.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
-            """
-            state_dict.pop('encoder.visual_embedding.img_order_embedding.weight')
+            n_embeds, dim = state_dict['shared.weight'].shape  
+            n_images, dim = state_dict['encoder.visual_embedding.img_order_embedding.weight'].shape
+            state_dict['encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.img_order_embedding.weight']\
+                , self.model.encoder.visual_embedding.img_order_embedding.weight[n_images:]))
+            # state_dict.pop('encoder.visual_embedding.img_order_embedding.weight')
             state_dict['shared.weight'] = torch.cat((state_dict['shared.weight'], self.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
             state_dict['lm_head.weight'] = torch.cat((state_dict['lm_head.weight'], self.model.lm_head._parameters['weight'][n_embeds:]))
             state_dict['encoder.visual_embedding.obj_order_embedding.weight'] = torch.cat((state_dict['encoder.visual_embedding.obj_order_embedding.weight'], \
@@ -201,11 +201,8 @@ class TrainerBase(object):
             state_dict['decoder.embed_tokens.weight'] = torch.cat((state_dict['decoder.embed_tokens.weight'], self.model.decoder.embed_tokens._parameters['weight'][n_embeds:]))
         else:
             n_embeds, dim = state_dict['model.shared.weight'].shape 
-            """ 
-            state_dict['model.encoder.visual_embedding.img_order_embedding.weight'] = torch.cat((state_dict['model.encoder.visual_embedding.img_order_embedding.weight'], \
-                self.model.model.encoder.visual_embedding.img_order_embedding.weight[2:]))
-            """
-            state_dict.pop('model.encoder.visual_embedding.img_order_embedding.weight')
+            # state_dict['model.encoder.visual_embedding.img_order_embedding.weight'] = self.model.model.encoder.visual_embedding.img_order_embedding.weight
+            # state_dict.pop('model.encoder.visual_embedding.img_order_embedding.weight')
             state_dict['model.shared.weight'] = torch.cat((state_dict['model.shared.weight'], self.model.model.encoder.embed_tokens._parameters['weight'][n_embeds:]))
             state_dict['lm_head.weight'] = torch.cat((state_dict['lm_head.weight'], self.model.lm_head._parameters['weight'][n_embeds:]))
             state_dict['model.encoder.visual_embedding.obj_order_embedding.weight'] = torch.cat((state_dict['model.encoder.visual_embedding.obj_order_embedding.weight'], \

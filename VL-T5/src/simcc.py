@@ -106,7 +106,6 @@ class Trainer(TrainerBase):
         print('Building the train loader')
         train_raw_data = json.load(open(args.train_path, 'r', encoding='utf-8'))
         train_dataset = SIMMCFineTuneDataset(train_raw_data, args.features_path, args, self.tokenizer, args.randomization)
-        train_dataset.__getitem__(10)
         train_sampler = DistributedSampler(train_dataset) if args.distributed else Sampler(train_dataset)
         self.train_loader = DataLoader(train_dataset,
                                       batch_size=args.batch_size,

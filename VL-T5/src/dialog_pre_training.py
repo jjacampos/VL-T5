@@ -64,7 +64,7 @@ class Trainer(TrainerBase):
         num_added_toks = 0
         if config.use_vis_order_embedding:
             additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<vis_extra_id_{i}>' for i in range(300-1, -1, -1)] + \
                 [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1) ]
             special_tokens_dict = {
                 'additional_special_tokens': additional_special_tokens}

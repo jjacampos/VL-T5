@@ -36,7 +36,7 @@ class VLT5COMET(VLT5):
                 obj_order_ids = torch.tensor(self.tokenizer.encode([f'<vis_extra_id_{index}>' for index in obj_order_ids], add_special_tokens=False))
                 obj_order_ids = obj_order_ids.view(1, 1, n_boxes).expand(B, context_images_amount, -1).contiguous().view(B, context_images_amount*n_boxes).to(device)
             else:
-                obj_order_ids = batch['obj_order_ids'].to(device)
+                obj_order_ids = batch['obj_order_ids'].to(device).view(B, context_images_amount*n_boxes)   
 
             output = self(input_ids=input_ids,
                         vis_inputs=(vis_feats, vis_pos, img_order_ids, obj_order_ids),

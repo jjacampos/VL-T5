@@ -46,7 +46,7 @@ def make_uid(img_id, dset, sent_idx):
     return "%s_%s_%03d" % (img_id, dset, sent_idx)
 
 
-def get_datum(datum, max_num_captions=5):
+def get_datum(datum, max_num_captions=100):
 
     data = []
     _sents = []
@@ -364,7 +364,7 @@ class PretrainDataset(Dataset):
             self.tokenizer = BartTokenizer.from_pretrained(args.backbone)
 
         additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)] + \
+                [f'<vis_extra_id_{i}>' for i in range(300-1, -1, -1)] + \
                 [f'<img_extra_id_{i}>' for i in range(100-1, -1, -1)]
         special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
         self.tokenizer.add_special_tokens(special_tokens_dict)
@@ -526,7 +526,7 @@ class PretrainDataset(Dataset):
                             input_tokens.append(obj)
                     source_text = ' '.join(input_tokens)
 
-                # Target is always the last image
+                # Target is always the last image since others are random
                 img_indexes = self._generate_img_ids_(len(img_ids))                
                 obj_indexes = self._generate_obj_ids_(img_indexes)
                                                 
@@ -537,7 +537,7 @@ class PretrainDataset(Dataset):
             if task == 'og':
                 obj_ids = []
                 attr_ids = [] 
-                # We want to predict an object from the last image always. 
+                # We want to predict an object from the last image always since others are random
                 obj_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/obj_id'][()].tolist()
                 attr_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/attr_id'][()].tolist()
 
@@ -563,7 +563,7 @@ class PretrainDataset(Dataset):
             if task == 'cr':
                 obj_ids = []
                 attr_ids = [] 
-                # We want to predict an object from the last image always. 
+                # We want to predict an object from the last image always since others are random
                 obj_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/obj_id'][()].tolist()
                 attr_ids += self.source_to_h5[sources[-1]][f'{img_ids[-1]}/attr_id'][()].tolist()
 

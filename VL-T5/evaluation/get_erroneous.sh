@@ -1,0 +1,3 @@
+python3 get_erroneous_examples.py --input_path_target  /fsx/jacampos/data/comet/split_v2/mem_dials_test.json \
+--input_path_predicted /fsx/jacampos/experiments/vl-seq2seq/exploration/t5/text_image_features/no_mem_ids/global/test/predictions_dst_results.json /fsx/jacampos/experiments/vl-seq2seq/exploration/t5/text_image_features/no_mem_ids/global/test/predictions_dst_results.json \
+--output_path_report ./out.report

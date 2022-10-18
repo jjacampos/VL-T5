@@ -11,8 +11,8 @@ import argparse
 import collections
 import copy
 import json
+import ast
 import re
-import pdb
 
 
 def parse_flattened_result(to_parse):
@@ -37,7 +37,10 @@ def parse_flattened_result(to_parse):
         ]  # End of a dialog
     """
     dialog_act_regex = re.compile(r"([\w:?.?]*) *\[(.*)\] *\(([^\]]*)\) *\<([^\]]*)\>")
-    slot_regex = re.compile(r"([A-Za-z0-9_.-:]*) *= *(\[(.*)\]|[^,]*)")
+    # My update for avoiding the issue in the that I wrote in the paper
+    # slot_regex = re.compile(r"([A-Za-z0-9_.-:]*) *= *(\[(.*)\]|[^,]*)")
+    slot_regex = re.compile(r"([A-Za-z0-9_.-:]*) *= *(\[[^]]*\]|[^,]*)")
+
     request_regex = re.compile(r"([A-Za-z0-9_.-:]+)")
     object_regex = re.compile(r"([A-Za-z0-9]+)")
 
@@ -46,8 +49,11 @@ def parse_flattened_result(to_parse):
     # Parse
     to_parse = to_parse.strip()
     # to_parse: 'DIALOG_ACT_1 : [ SLOT_NAME = SLOT_VALUE, ... ] ...'
+    # Originally slots is a dict if not then is readed as a string
+
     for dialog_act in dialog_act_regex.finditer(to_parse):
-        d = {
+        """
+            d = {
             "act": dialog_act.group(1),
             "slots": [],
             "request_slots": [],
@@ -56,7 +62,26 @@ def parse_flattened_result(to_parse):
 
         for slot in slot_regex.finditer(dialog_act.group(2)):
             d["slots"].append([slot.group(1).strip(), slot.group(2).strip()])
+        """
+        d = {
+            "act": dialog_act.group(1),
+            "slots": {},
+            "request_slots": [],
+            "memories": [],
+        }
 
+        for slot in slot_regex.finditer(dialog_act.group(2)):
+            try:
+                if "[" in slot.group(2):
+                    slot_list = ast.literal_eval(slot.group(2).strip())
+                else:
+                    slot_list = [slot.group(2).strip()]
+                d["slots"][slot.group(1).strip()]= slot_list
+            # Still problem when the names don't have '' on them
+            except:
+                print('If happens many times improve parsing')
+                d["slots"][slot.group(1).strip()] = []
+            
         for request_slot in request_regex.finditer(dialog_act.group(3)):
             d["request_slots"].append(request_slot.group(1).strip())
         for object_id in object_regex.finditer(dialog_act.group(4)):
