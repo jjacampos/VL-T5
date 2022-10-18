@@ -75,66 +75,68 @@ def main(args):
     objids = get_data(OBJ_URL) 
     
     attrids = get_data(ATTR_URL)
-
     frcnn_config = Config.from_pretrained("unc-nlp/frcnn-vg-finetuned")
     if torch.cuda.is_available():
             frcnn_config.model.device = "cuda"
     frcnn = GeneralizedRCNN.from_pretrained("unc-nlp/frcnn-vg-finetuned", config=frcnn_config)
     image_preprocess = Preprocess(frcnn_config)
-
     images_data = {}
+    for dataset_path in args.dataset_path:
 
-    for img_file in tqdm(os.listdir(args.imgs_input_path), total=len(os.listdir(args.imgs_input_path))):
-        full_img_path = os.path.join(args.imgs_input_path, img_file)
+        dataset = json.load(open(dataset_path, "r"))
 
-        """
-        frcnn_visualizer = SingleImageViz(full_img_path, id2obj=objids, id2attr=attrids) 
-        """        
 
-        scene_graph_file = f"{img_file.split('.')[0]}_scene.json"
-        try:
-            scene_graph = json.load(open(os.path.join(args.scene_graphs_input_path, scene_graph_file)))
-        except:
-            print(f"Error with the following path: {scene_graph_file}")
-            continue
+        for elem in tqdm(dataset['dialogue_data'], total=len(dataset['dialogue_data'])):
+            for scene_id in elem['scene_ids'].values():
+                full_img_path = os.path.join(args.imgs_input_path, f"{scene_id.replace('m_', '')}.png")
 
-        if len(scene_graph['scenes']) > 1:
-            print(f'{full_img_path} has to be checked')
+                """
+                frcnn_visualizer = SingleImageViz(full_img_path, id2obj=objids, id2attr=attrids) 
+                """        
 
-        try:
-            images, sizes, scales_yx = image_preprocess(full_img_path)
-        except:
-            print(f"Error when processing {full_img_path}")
-            continue
-        bboxes, indexes = get_bboxes_and_indexes(scene_graph['scenes'][0]['objects'])
-        bboxes = _scale_box_ours(bboxes, scales_yx)
+                scene_graph_file = f"{scene_id}_scene.json"
+                try:
+                    scene_graph = json.load(open(os.path.join(args.scene_graphs_input_path, scene_graph_file)))
+                except:
+                    print(f"Error with the following path: {scene_graph_file}")
+                    continue
 
-        output_dict = frcnn(
-            images,
-            sizes,
-            scales_yx=scales_yx,
-            padding="max_detections",
-            return_tensors="pt",
-            gt_boxes=bboxes,
-        )
+                if len(scene_graph['scenes']) > 1:
+                    print(f'{full_img_path} has to be checked')
 
-        """
-        frcnn_visualizer.draw_boxes(
-            output_dict.get("boxes"),
-            output_dict.get("obj_ids"),
-            output_dict.get("obj_probs"),
-            output_dict.get("attr_ids"), 
-            output_dict.get("attr_probs"),
-        ) 
-        
-        showarray(frcnn_visualizer._get_buffer())  
-        """
-        import pdb
-        pdb.set_trace()   
-        output_dict["indexes"] = indexes
-        img_id = img_file.split('.png')[0]
+                try:
+                    images, sizes, scales_yx = image_preprocess(full_img_path)
+                except:
+                    print(f"Error when processing {full_img_path}")
+                    continue
 
-        images_data[img_id] = output_dict
+                bboxes, indexes = get_bboxes_and_indexes(scene_graph['scenes'][0]['objects'])
+                bboxes = _scale_box_ours(bboxes, scales_yx)
+
+                output_dict = frcnn(
+                    images,
+                    sizes,
+                    scales_yx=scales_yx,
+                    padding="max_detections",
+                    return_tensors="pt",
+                    gt_boxes=bboxes,
+                )
+
+                """
+                frcnn_visualizer.draw_boxes(
+                    output_dict.get("boxes"),
+                    output_dict.get("obj_ids"),
+                    output_dict.get("obj_probs"),
+                    output_dict.get("attr_ids"), 
+                    output_dict.get("attr_probs"),
+                ) 
+                
+                showarray(frcnn_visualizer._get_buffer())  
+                """
+                output_dict["indexes"] = indexes
+                img_id = scene_id
+
+                images_data[img_id] = output_dict
         
     pickle.dump(images_data, open(args.output_path, 'wb'))
 
@@ -144,6 +146,8 @@ if __name__ == '__main__':
     parser.add_argument('--imgs_input_path')
     parser.add_argument('--scene_graphs_input_path')
     parser.add_argument('--output_path')
+    parser.add_argument('--dataset_path',
+        nargs="+",)
 
     args = parser.parse_args()
 
