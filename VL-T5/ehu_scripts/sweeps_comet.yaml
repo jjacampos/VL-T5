@@ -1,0 +1,60 @@
+program: /sc01a4/users/jcampos004/PERSONAL_STORAGE/summer_internship/VL-T5/VL-T5/src/comet.py
+method: bayes
+metric:
+  name: validation_accuracy
+  goal: maximize
+parameters:
+  train_path:
+    value: "/tartalo02/users/jcampos004/FEEDBACK/reward_model/data/final_dataset/train_dataset_5500.jsonl"
+  valid_path:
+    value: "/tartalo02/users/jcampos004/FEEDBACK/reward_model/data/final_dataset/development_dataset_200.jsonl"
+  test_path:
+    value: ""
+  coco_annotations_path:
+    value:
+  memory_files:
+    value:
+  coco_features_path:
+    value:
+  special_tokens_path:
+    value:
+  optim:
+    value: "adamw"
+  warmup_ratio:
+    value: 0.1
+  clip_rad_norm:
+    value: 5
+  lr:
+    value: 5e-5
+  epochs:
+    value: 20
+  num_workers:
+    value: 1
+  backbone:
+    values: ['facebook/bart-base', 't5-base']
+  num_beans:
+    value: 5
+  batch_size: 
+    value: 32
+  valid_batch_size:
+    value: 64
+  n_boxes:
+    10
+  individual_vis_layer_norm:
+    value: false 
+  output: 
+    value: 
+  randomization:
+    values: ['random_global', 'no_random']
+  just_text_model:
+    values: [True, False] 
+  just_text_features:
+    values: [True, False]
+
+command:
+  - python3 -m torch.distributed.launch --nproc_per_node=1 --master_port=11111
+  - ${program}
+  - ${args}
+  - --distributed
+  - --multiGPU
+       
